@@ -1400,4 +1400,93 @@ describe("migliorie: validità OpenSpec", () => {
   });
 });
 
+
+describe("review: lifecycle, markdown and partial-file regressions", () => {
+  const baseTree = { openspec: { type: "directory" }, "openspec/changes": { type: "directory" } };
+  const proposal = "# Title\n\n## Why\n\n" + "x".repeat(60) + "\n\n## What Changes\n- feature\n";
+  const spec = "## ADDED Requirements\n### Requirement: R\nThe system SHALL work.\n#### Scenario: S\n- WHEN ready\n- THEN works\n";
+
+  test("malformed fenced-code lines do not hang the Markdown parser", () => {
+    for (const input of ["\x60\x60\x60js\x60oops", "~~~js\x60oops"]) {
+      const fragment = renderMarkdown(input + "\nNext line");
+      assert.strictEqual(fragment.children.length, 1);
+      assert.strictEqual(fragment.children[0].tag, "p");
+    }
+  });
+
+  test("changing workspace releases a pending manual refresh", async () => {
+    const fsA = createMockFs({ tree: baseTree });
+    const fsB = createMockFs({ tree: baseTree });
+    const original = fsA.listFiles.bind(fsA);
+    let delay = false, release;
+    fsA.listFiles = async (path) => {
+      if (delay && path === "openspec") await new Promise(resolve => { release = resolve; });
+      return original(path);
+    };
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    try {
+      el.context = createContext(fsA, "review-switch-a");
+      await wait(8);
+      delay = true;
+      const refresh = el.shadowRoot.querySelector("#openspec-refresh");
+      refresh.fire("click");
+      assert.strictEqual(refresh.getAttribute("aria-busy"), "true");
+      await Promise.resolve();
+      assert.strictEqual(typeof release, "function");
+      el.context = createContext(fsB, "review-switch-b");
+      await wait(8);
+      release();
+      await wait(8);
+      assert.strictEqual(refresh.getAttribute("aria-busy"), "false");
+      const before = fsB.calls.list;
+      refresh.fire("click");
+      await wait(8);
+      assert.ok(fsB.calls.list > before);
+    } finally {
+      if (release) release();
+      el.disconnectedCallback();
+    }
+  });
+
+  async function expectUnverified(kind) {
+    const tree = {
+      ...baseTree,
+      "openspec/changes/x": { type: "directory" },
+      "openspec/changes/x/proposal.md": { type: "file" },
+      "openspec/changes/x/specs": { type: "directory" },
+      "openspec/changes/x/specs/alpha": { type: "directory" },
+      "openspec/changes/x/specs/alpha/spec.md": { type: "file" },
+      ...(kind === "unreadable" ? { "openspec/changes/x/specs/beta": { type: "directory" } } : {}),
+    };
+    const files = createMockFs({
+      tree,
+      contents: {
+        "openspec/changes/x/proposal.md": proposal,
+        "openspec/changes/x/specs/alpha/spec.md": spec,
+      },
+      rejectPaths: kind === "unreadable" ? ["openspec/changes/x/specs/beta"] : [],
+      truncatedReads: kind === "truncated" ? ["openspec/changes/x/specs/alpha/spec.md"] : [],
+    });
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    try {
+      el.context = createContext(files, "review-validation-" + kind);
+      await wait(8);
+      el.shadowRoot.querySelector(".os-change-toggle").fire("click");
+      await wait(12);
+      const badge = el.shadowRoot.querySelector(".os-validity");
+      assert.ok(badge);
+      assert.strictEqual(badge.textContent, "?", "partial reads must not produce structure ok");
+    } finally {
+      el.disconnectedCallback();
+    }
+  }
+
+  test("unreadable spec directory must not produce structure ok", async () => expectUnverified("unreadable"));
+  test("truncated spec must not produce structure ok", async () => expectUnverified("truncated"));
+});
+
 console.log("OK: suite eseguita");
