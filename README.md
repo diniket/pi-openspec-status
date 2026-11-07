@@ -40,8 +40,8 @@ ln -s "$PWD/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 ```
 
 Reload the PI WEB page. Requirements: PI WEB 1.202611.0 (plugin API v5), an OpenSpec
-project in the workspace (`openspec/changes/`). No dependencies and no build step: `dist/`
-is committed and byte-identical to `src/`.
+project in the workspace (`openspec/changes/`). No dependencies and no toolchain: `dist/`
+is a copy of `src/`, committed and byte-identical.
 
 ## Known Pi Web limitation
 
@@ -50,7 +50,7 @@ On PI WEB 1.202611.0, opening a saved URL containing `tool=openspec-status:opens
 ## Development
 
 ```bash
-node --test test/run.js     # regression suite, no dependencies
+node --test test/run.js     # 96 tests, no dependencies
 node scripts/build.mjs      # copy src -> dist after editing
 ```
 
@@ -123,8 +123,8 @@ ln -s "$PWD/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 ```
 
 Ricarica la pagina di PI WEB. Requisiti: PI WEB 1.202611.0 (plugin API v5) e un progetto
-OpenSpec nel workspace (`openspec/changes/`). Nessuna dipendenza e nessun build: `dist/` è
-versionato ed è byte-identico a `src/`.
+OpenSpec nel workspace (`openspec/changes/`). Nessuna dipendenza e nessun toolchain: `dist/`
+è una copia di `src/`, versionata e byte-identica.
 
 ## Limite noto di Pi Web
 
@@ -133,7 +133,7 @@ Su PI WEB 1.202611.0, un URL salvato con `tool=openspec-status:openspec-status` 
 ## Sviluppo
 
 ```bash
-node --test test/run.js     # suite di regressione, nessuna dipendenza
+node --test test/run.js     # 96 test, nessuna dipendenza
 node scripts/build.mjs      # copia src -> dist dopo una modifica
 ```
 
