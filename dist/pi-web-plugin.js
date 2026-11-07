@@ -50,9 +50,13 @@ const EXTERNAL_CHECK_MS = 60_000;
 
 // Chiavi di navigazione del pannello (contribution-scoped, per workspace):
 // servono a ripristinare selezione, scheda e file di spec dopo un cambio tool.
-const NAV_CHANGE = "osChange";
-const NAV_TAB = "osTab";
-const NAV_SPEC = "osSpec";
+// L'host 1.202611.0 accetta solo chiavi che rispettano ^[a-z][a-z0-9.-]*$ e
+// rifiuta le maiuscole con un errore (`Invalid contribution navigation key`),
+// quindi niente camelCase: con `osChange` la scrittura falliva, l'errore
+// veniva inghiottito e la persistenza restava muta (verificato in UI).
+const NAV_CHANGE = "os-change";
+const NAV_TAB = "os-tab";
+const NAV_SPEC = "os-spec";
 
 // Regole di validazione OpenSpec 1.15.0 (dist/core/validation/constants.js)
 // riprodotte in sola lettura sui file letti dal pannello.
@@ -495,7 +499,7 @@ const MD_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 const MD_TASK = /^\[([ xX])\]\s?([\s\S]*)$/;
 
 function mdList(items) {
-  const root = document.createElement("ul");
+  const root = document.createElement(items[0].ordered ? "ol" : "ul");
   const stack = [{ indent: items[0].indent, list: root }];
   let lastItem = null;
   for (const it of items) {
@@ -644,7 +648,7 @@ export function renderMarkdown(text) {
     const para = [];
     while (i < lines.length && !blank(lines[i]) && !MD_ITEM.test(lines[i])
       && !/^(#{1,6})\s/.test(lines[i]) && !/^\s*>\s?/.test(lines[i])
-      && !/^\s*(`{3,}|~{3,})/.test(lines[i]) && !/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(lines[i])) {
+      && !/^\s*(`{3,}|~{3,})\s*([^`]*)$/.test(lines[i]) && !/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(lines[i])) {
       para.push(lines[i]);
       i++;
     }
@@ -677,6 +681,7 @@ function clearWorkspaceCaches(workspaceKey) {
 async function readSpecList(files, base, detail) {
   const out = { state: "absent", files: [], truncated: false, error: null };
   const root = await safeList(files, `${base}/specs/`);
+  if (root.truncated) out.truncated = true;
   if (root.error) {
     out.state = "error";
     out.error = errMessage(root.error);
@@ -689,8 +694,10 @@ async function readSpecList(files, base, detail) {
     const inner = await safeList(files, `${base}/specs/${cap.name}/`);
     if (inner.error) {
       detail.errors.push(`${cap.name}: ${errMessage(inner.error)}`);
+      out.truncated = true;
       continue;
     }
+    if (inner.truncated) out.truncated = true;
     for (const entry of inner.entries || []) {
       if (entry.type !== "file" || !entry.name.toLowerCase().endsWith(".md")) continue;
       if (found.length >= MAX_SPEC_FILES) { out.truncated = true; break; }
@@ -749,6 +756,7 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
     }
     const lines = file.content.replace(/\r\n/g, "\n").split("\n");
     let deltas = 0;
+    let requirements = 0;
     let requirement = null;
     let scenarios = 0;
     const closeRequirement = () => {
@@ -768,6 +776,7 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
       if (DELTA_HEADER.test(line)) { deltas++; continue; }
       const req = REQUIREMENT_HEADER.exec(line);
       if (req !== null) {
+        requirements++;
         closeRequirement();
         requirement = { title: req[1].trim() || "(untitled)", text: "", scenarios: 0 };
         continue;
@@ -784,6 +793,7 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
     if (deltas === 0) {
       invalid.push(`${file.path}: no delta header (## ADDED/MODIFIED/REMOVED/RENAMED Requirements)`);
     }
+    if (requirements === 0) invalid.push(`${file.path}: no "### Requirement:" block`);
     if (scenarios === 0) {
       invalid.push(`${file.path}: no "#### Scenario:" block`);
     }
@@ -797,6 +807,9 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
 const validationCache = new Map(); // `${workspaceKey}|${change}` -> { result, loadedAt }
 
 async function loadValidation(context, name, detail) {
+  if (detail.specs.state === "error" || detail.specs.truncated || detail.errors.length > 0) {
+    return { state: "unverified", reasons: ["spec listings incomplete or unreadable"], checked: false };
+  }
   const wsKey = openSpecKey(context);
   const key = `${wsKey}|${name}`;
   const hit = validationCache.get(key);
@@ -807,7 +820,7 @@ async function loadValidation(context, name, detail) {
     const specFiles = [];
     for (const file of detail.specs.files) {
       const doc = await loadDoc(context, file.path);
-      specFiles.push({ path: file.path, content: doc.state === "ok" || doc.state === "truncated" ? doc.content : null });
+      specFiles.push({ path: file.path, content: doc.state === "ok" ? doc.content : null });
     }
     let skipSpecs = false;
     try {
@@ -815,7 +828,7 @@ async function loadValidation(context, name, detail) {
       skipSpecs = /^\s*skip_specs\s*:\s*true\s*$/im.test(meta.content);
     } catch { /* nessun metadata: nessuno skip */ }
     result = inspectChangeValidity({
-      proposalText: proposal.state === "ok" || proposal.state === "truncated" ? proposal.content : null,
+      proposalText: proposal.state === "ok" ? proposal.content : null,
       hasProposal: detail.artifacts.proposal === "present",
       specFiles,
       hasSpecs: detail.specs.state === "present",
@@ -1016,16 +1029,26 @@ const cache = new Map();
 const anonymousKeys = new WeakMap();
 let anonymousKeySeq = 0;
 function openSpecKey(context) {
+  if (context === null || typeof context !== "object") return "anonymous:0";
   const machine = context?.machine?.id;
   const workspace = context?.workspace?.id;
   if (machine !== undefined && workspace !== undefined) return `${machine}:${workspace}`;
-  if (context === null || typeof context !== "object") return "anonymous:0";
   let key = anonymousKeys.get(context);
   if (key === undefined) {
     key = `anonymous:${++anonymousKeySeq}`;
     anonymousKeys.set(context, key);
   }
   return key;
+}
+
+// L'host crea un nuovo oggetto context a ogni suo render (l'identita' cambia
+// anche restando sullo stesso workspace). Scartare una risposta solo perche'
+// l'oggetto e' cambiato lasciava il pannello su "Loading change…" per sempre
+// finche' l'utente non riprovava (visto in UI dopo un deep link). Stessa
+// macchina + stesso workspace = stessa sorgente dati; i contesti senza
+// machine/workspace restano distinti per identita'.
+function sameWorkspaceContext(a, b) {
+  return a === b || openSpecKey(a) === openSpecKey(b);
 }
 
 function pruneCache() {
@@ -1270,6 +1293,8 @@ class OpenspecPanelElement extends HTMLElement {
   #doc = null;            // { status, path, content, error }
   #docSeq = 0;
   #detailSeq = 0;         // ordine dei load di dettaglio (una risposta vecchia non vince)
+  #reloadSeq = 0;
+  #validitySeq = 0;
   #pending = false;       // un refresh manuale e' in corso
   #timer = null;          // controllo periodico delle modifiche esterne
   #fingerprint = null;    // impronta degli elenchi all'ultima lettura buona
@@ -1290,10 +1315,21 @@ class OpenspecPanelElement extends HTMLElement {
     // Un altro workspace (anche con una change omonima) non eredita selezione,
     // dettaglio o documento: si riparte dall'elenco.
     if (!sameWorkspace) this._resetSelection();
+    else if (prev !== value && this.#pending) {
+      // L\x27host puo\x27 sostituire il context anche senza cambiare workspace.
+      // Un reload avviato col vecchio oggetto verra\x27 scartato: sblocca la UI.
+      this.#reloadSeq++;
+      this.#pending = false;
+      if (this.#nodes !== null) this._setBusy(false);
+    }
     this._refresh();
   }
 
   _resetSelection() {
+    this.#reloadSeq++;
+    this.#validitySeq++;
+    this.#pending = false;
+    if (this.#nodes !== null) this._setBusy(false);
     this.#detailSeq++;   // invalida i load di dettaglio in corso
     this.#docSeq++;      // e quelli dei documenti
     this.#selected = null;
@@ -1326,6 +1362,10 @@ class OpenspecPanelElement extends HTMLElement {
 
   disconnectedCallback() {
     this.#generation++;
+    this.#reloadSeq++;
+    this.#validitySeq++;
+    this.#pending = false;
+    if (this.#nodes !== null) this._setBusy(false);
     this.#detailSeq++;
     this.#docSeq++;
     this._stopTimer();
@@ -1514,31 +1554,34 @@ class OpenspecPanelElement extends HTMLElement {
   _manualRefresh() {
     const ctx = this.#context;
     if (ctx === null || ctx.files === undefined || this.#pending) return;
-    this._lastForce = Date.now();
+    this.#lastForce = Date.now();
     this._reload(ctx, { silent: false });
   }
 
   _reload(ctx, { silent }) {
+    const reloadSeq = ++this.#reloadSeq;
     clearWorkspaceCaches(openSpecKey(ctx));
     this.#pending = true;
     if (!silent) this._setBusy(true);
     const generation = this.#generation;
     loadOpenSpecState(ctx, { force: true })
       .then(res => {
-        if (!this.isConnected || this.#generation !== generation || ctx !== this.#context) return;
+        if (!this.isConnected || this.#generation !== generation || reloadSeq !== this.#reloadSeq || ctx !== this.#context) return;
         this.#pending = false;
         this._setBusy(false);
         this._refreshFingerprint(ctx);
         // Le cache del workspace sono state svuotate: il dettaglio aperto va
         // riletto, altrimenti resterebbe a schermo il contenuto precedente.
         this.#detail = null;
+        this.#validitySeq++;
+        this.#validity = null;
         this.#detailStatus = this.#selected === null ? "idle" : "loading";
         this.#doc = null;
         this._renderState(res.state);
         if (this.#selected !== null) this._openChange(this.#selected, { keepTab: true });
       })
       .catch(err => {
-        if (!this.isConnected || this.#generation !== generation || ctx !== this.#context) return;
+        if (!this.isConnected || this.#generation !== generation || reloadSeq !== this.#reloadSeq || ctx !== this.#context) return;
         this.#pending = false;
         this._setBusy(false);
         this._renderState({
@@ -1772,7 +1815,7 @@ class OpenspecPanelElement extends HTMLElement {
       nav.set(NAV_CHANGE, this.#selected, { replace: true });
       nav.set(NAV_TAB, this.#selected === null ? undefined : this.#tab, { replace: true });
       nav.set(NAV_SPEC, this.#selected === null || this.#tab !== "specs" ? undefined : String(this.#specIndex), { replace: true });
-    } catch { /* host senza navigazione scrivibile: nessuna persistenza */ }
+    } catch { /* host senza navigazione scrivibile (o chiave non valida): nessuna persistenza */ }
   }
 
   // Ripristino al mount (o al ritorno da un altro tool): se la change non
@@ -1804,6 +1847,8 @@ class OpenspecPanelElement extends HTMLElement {
     const keepTab = options.keepTab === true && sameChange;
     this.#selected = name;
     if (!sameChange) {
+      this.#validity = null;
+      this.#validitySeq++;
       // Cambio di change: il dettaglio precedente non deve restare a schermo.
       this.#detail = null;
       this.#detailStatus = "loading";
@@ -1827,7 +1872,7 @@ class OpenspecPanelElement extends HTMLElement {
       .then(detail => {
         if (!this.isConnected || this.#generation !== generation) return;
         if (seq !== this.#detailSeq) return; // superata da una selezione/refresh piu' recente
-        if (ctx !== this.#context || this.#selected !== name) return;
+        if (!sameWorkspaceContext(ctx, this.#context) || this.#selected !== name) return;
         this.#detail = detail;
         this.#detailStatus = detail.state === "error" ? "error" : "ready";
         this.#validity = null;
@@ -1838,7 +1883,7 @@ class OpenspecPanelElement extends HTMLElement {
       .catch(err => {
         if (!this.isConnected || this.#generation !== generation) return;
         if (seq !== this.#detailSeq) return;
-        if (ctx !== this.#context || this.#selected !== name) return;
+        if (!sameWorkspaceContext(ctx, this.#context) || this.#selected !== name) return;
         this.#detailStatus = "error";
         this.#detail = { state: "error", name, error: errMessage(err), artifacts: allUnknown(), specs: { state: "absent", files: [], truncated: false, error: null }, errors: [] };
         this._renderDetailOnly();
@@ -1849,9 +1894,10 @@ class OpenspecPanelElement extends HTMLElement {
   // cache per TTL): le altre restano senza giudizio.
   _loadValidity(ctx, name, detail) {
     if (detail.state !== "ready") return;
+    const seq = ++this.#validitySeq;
     loadValidation(ctx, name, detail)
       .then(result => {
-        if (!this.isConnected || ctx !== this.#context || this.#selected !== name) return;
+        if (!this.isConnected || seq !== this.#validitySeq || !sameWorkspaceContext(ctx, this.#context) || this.#selected !== name || this.#detail !== detail) return;
         this.#validity = result;
         // Il badge di validita' sta sulla card: si ridisegna la lista, non solo
         // il dettaglio.
@@ -2059,7 +2105,7 @@ class OpenspecPanelElement extends HTMLElement {
     this._renderTabPanelContent();
     loadDoc(ctx, path)
       .then(doc => {
-        if (seq !== this.#docSeq || ctx !== this.#context) return;
+        if (seq !== this.#docSeq || !sameWorkspaceContext(ctx, this.#context)) return;
         if (this.#tab !== tabKey) return;
         this.#doc = { status: "ready", path, doc };
         this._renderTabPanelContent();

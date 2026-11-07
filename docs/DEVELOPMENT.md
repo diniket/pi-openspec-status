@@ -8,7 +8,7 @@ Everything you need to change this plugin without rediscovering the same things 
 src/pi-web-plugin.js    the whole plugin, one file, no imports
 dist/pi-web-plugin.js   byte-identical copy of src, this is what PI WEB serves
 scripts/build.mjs       copies src -> dist, nothing else
-test/run.js             all 56 tests
+test/run.js             96 test definitions (86 baseline + 10 regressions)
 test/dom-stub.js        minimal DOM (elements, shadow roots, querySelector)
 test/fs-mock.js         in-memory workspace file API + context factory
 fixtures/               on-disk sample workspaces, read by createFsFromDir()
@@ -24,10 +24,8 @@ node --test test/run.js      # run the suite
 node scripts/build.mjs       # regenerate dist/ after editing src
 ```
 
-Always edit `src/`, never `dist/`. Nothing checks that the two agree, so run
-`node scripts/build.mjs` after every edit to `src/`. If you want that enforced, add a test
-that compares the two files byte for byte: it is three lines and it would have caught real
-drift during development.
+Always edit `src/`, never `dist/`, and run `node scripts/build.mjs` after each source edit.
+The existing test suite checks byte-for-byte equality of `src/` and `dist/`.
 
 ## The host API, and what it does not give you
 
@@ -100,11 +98,10 @@ that needs to reach a session row has to come from a mechanism the host actually
 
 ## Bounds
 
-`INDEX_MAX_CHANGES = 40` and `INDEX_MAX_RELAYS = 20`. Each change costs up to three reads
+`INDEX_MAX_CHANGES = 40` and `MAX_SPEC_FILES = 12` are independent limits. Each change costs up to three reads
 (directory, `specs/`, `tasks.md`), so without a cap a workspace with hundreds of changes
-turns the first render into hundreds of requests. The cap applies in **both** load paths
-(the panel and the change index); when it bites, `state.truncated` is set and the footer
-says so.
+turns the first render into hundreds of requests. The active-change cap sets `state.truncated`, reported in the timestamp header. The spec-file
+cap is separate, and incomplete spec listings cannot yield `structure ok`.
 
 ## Testing approach
 
@@ -184,15 +181,43 @@ the primary mechanism; the timer covers edits made outside Pi Web, which the hos
 report.
 
 Selection survives a tool switch through `context.navigation` (contribution-scoped query):
-`osChange`, `osTab`, `osSpec` are written with `replace: true` and read back when the panel
-mounts. Nothing is stored on disk, and the state is per workspace because the navigation object
+`os-change`, `os-tab`, `os-spec` are written with `replace: true` and read back when the panel
+mounts. Keys must match the host's `^[a-z][a-z0-9.-]*$` rule: PI WEB 1.202611.0 rejects
+anything else (`Invalid contribution navigation key`) and the panel swallows the error, so a
+camelCase key silently disables persistence — the value ends up in the address bar as
+`openspec-status.openspec-status--os-change`. The test DOM stub enforces the same rule.
+Nothing is stored on disk, and the state is per workspace because the navigation object
 is. A change that no longer exists clears the key instead of restoring stale state.
+
+In-flight loads compare `machine` + `workspace` (`sameWorkspaceContext`), not the identity of
+the context object: the host builds a new object on every render, and an identity check
+discarded perfectly good responses, leaving the detail or the document on `Loading…`
+forever. The anti-contamination guarantee is unchanged — a different workspace still cannot
+write over the panel.
 
 `inspectChangeValidity()` mirrors the *structural* rules of `openspec validate` 1.15.0 that can
 be checked from the files the panel already reads (the badge says `structure ok`, never
 "valid", because a full CLI run also validates the main specs and is not performed here): `## Why` (≥ 50 characters), `## What Changes`, at least
-one delta with a `## ADDED/MODIFIED/REMOVED/RENAMED Requirements` header, each requirement with
+one delta with a `## ADDED/MODIFIED/REMOVED/RENAMED Requirements` header, at least one
+`### Requirement:` block per spec file, each requirement with
 SHALL/MUST and at least one `#### Scenario:`. Too-long requirement text is treated as a warning,
 like the CLI does. Missing artifacts are `incomplete`, non-conforming artifacts are `invalid`,
 and anything not readable is `unverified` — never a guess. It runs once per selected change
 (one or two extra reads, cached with `DETAIL_TTL_MS`), not on every render.
+
+## Regression checks added after review
+
+The test suite includes seven review regressions: malformed Markdown fences, a refresh
+pending across a workspace switch, a new context object for the same workspace, unreadable
+spec directories, truncated spec files, orphan Scenario blocks without any Requirement,
+and numbered Markdown lists. These run in the Node DOM harness.
+
+Three further regressions came out of the graphical verification on the running host: the
+navigation keys (the stub rejects any key the host would reject, so persistence cannot
+silently break again) and two "context object replaced while loading" cases, one for the
+change detail and one for the document, which used to leave the panel on `Loading…` until
+the user clicked again.
+
+PI WEB itself may not restore a deep link with `tool=openspec-status:openspec-status` during
+initial plugin activation. This issue is in the host route restore logic; open the project
+and select the OpenSpec tab as a workaround. No host patch is part of this plugin.

@@ -1163,6 +1163,11 @@ function mutableWorkspace(tasksText) {
   return { state, files, ctx: createContext(files, "improve-1") };
 }
 
+// Riproduce il contratto dell'host 1.202611.0: la chiave deve rispettare
+// ^[a-z][a-z0-9.-]*$ (le maiuscole vengono rifiutate con un errore che il
+// pannello inghiotte, quindi una chiave non valida rompe la persistenza in
+// silenzio). Se lo stub accettasse tutto, il test non se ne accorgerebbe.
+const NAV_KEY = /^[a-z][a-z0-9.-]*$/;
 const navStub = (initial = {}) => {
   const query = { ...initial };
   return {
@@ -1170,6 +1175,7 @@ const navStub = (initial = {}) => {
     contributionId: "openspec-status:openspec-status",
     query,
     set(key, value, options) {
+      if (!NAV_KEY.test(key)) throw new Error(`Invalid contribution navigation key: ${key}`);
       if (value === undefined || value === null) delete query[key];
       else query[key] = String(value);
       this.last = { key, value, options };
@@ -1287,9 +1293,9 @@ describe("migliorie: persistenza della selezione", () => {
     await wait(8);
     first.shadowRoot.querySelectorAll(".os-spec")[1].fire("click");
     await wait(8);
-    assert.strictEqual(nav.query.osChange, "x");
-    assert.strictEqual(nav.query.osTab, "specs");
-    assert.strictEqual(nav.query.osSpec, "1");
+    assert.strictEqual(nav.query["os-change"], "x");
+    assert.strictEqual(nav.query["os-tab"], "specs");
+    assert.strictEqual(nav.query["os-spec"], "1");
     first.disconnectedCallback();
 
     // "ritorno" dal pannello Files: nuovo elemento, stesso stato di navigazione
@@ -1312,14 +1318,14 @@ describe("migliorie: persistenza della selezione", () => {
       tree: { openspec: { type: "directory" }, "openspec/changes": { type: "directory" }, "openspec/changes/y": { type: "directory" }, "openspec/changes/y/proposal.md": { type: "file", size: 5 } },
       contents: { "openspec/changes/y/proposal.md": "# Y\n" },
     });
-    const nav = navStub({ osChange: "sparita", osTab: "tasks" });
+    const nav = navStub({ "os-change": "sparita", "os-tab": "tasks" });
     const el = new OpenspecPanelElement();
     el.isConnected = true;
     el.connectedCallback();
     el.context = { ...createContext(fs, "persist-2"), navigation: nav };
     await wait(10);
     assert.strictEqual(el.shadowRoot.querySelector("#openspec-detail"), null);
-    assert.strictEqual(nav.query.osChange, undefined, "la chiave stantia viene ripulita");
+    assert.strictEqual(nav.query["os-change"], undefined, "la chiave stantia viene ripulita");
     el.disconnectedCallback();
   });
 
@@ -1328,7 +1334,7 @@ describe("migliorie: persistenza della selezione", () => {
       tree: { openspec: { type: "directory" }, "openspec/changes": { type: "directory" }, [`openspec/changes/${change}`]: { type: "directory" }, [`openspec/changes/${change}/proposal.md`]: { type: "file", size: 5 } },
       contents: { [`openspec/changes/${change}/proposal.md`]: `# ${change}\n` },
     });
-    const navA = navStub({ osChange: "a-change", osTab: "tasks" });
+    const navA = navStub({ "os-change": "a-change", "os-tab": "tasks" });
     const el = new OpenspecPanelElement();
     el.isConnected = true;
     el.connectedCallback();
@@ -1336,7 +1342,7 @@ describe("migliorie: persistenza della selezione", () => {
     await wait(10);
     assert.ok(el.shadowRoot.querySelector("#openspec-detail"), "A: dettaglio ripristinato");
 
-    const navB = navStub({ osChange: "a-change" }); // stesso nome, progetto diverso
+    const navB = navStub({ "os-change": "a-change" }); // stesso nome, progetto diverso
     el.context = { ...createContext(mk("ws-b", "b-only"), "proj-b"), navigation: navB };
     await wait(10);
     assert.strictEqual(el.shadowRoot.querySelector("#openspec-detail"), null, "B: nessun dettaglio ereditato");
@@ -1345,6 +1351,52 @@ describe("migliorie: persistenza della selezione", () => {
     assert.ok(cards[0].textContent.includes("b-only"));
     assert.strictEqual(cards[0].getAttribute("aria-expanded"), "false");
     el.disconnectedCallback();
+  });
+
+  // L'host 1.202611.0 valida le chiavi di navigazione con ^[a-z][a-z0-9.-]*$:
+  // una chiave con maiuscole fa fallire nav.set, l'errore viene inghiottito e
+  // la persistenza sparisce senza segnali. Il test blocca il contratto.
+  test("le chiavi di navigazione sono quelle accettate dall'host (niente camelCase)", async () => {
+    const fs = createMockFs({
+      tree: {
+        openspec: { type: "directory" },
+        "openspec/changes": { type: "directory" },
+        "openspec/changes/z": { type: "directory" },
+        "openspec/changes/z/proposal.md": { type: "file", size: 4 },
+        "openspec/changes/z/specs": { type: "directory" },
+        "openspec/changes/z/specs/cap": { type: "directory" },
+        "openspec/changes/z/specs/cap/spec.md": { type: "file", size: 4 },
+      },
+      contents: {
+        "openspec/changes/z/proposal.md": "# Z\n",
+        "openspec/changes/z/specs/cap/spec.md": "# CAP\n",
+      },
+    });
+    const keys = [];
+    const nav = {
+      version: 1,
+      contributionId: "openspec-status:openspec-status",
+      query: {},
+      set(key, value) {
+        keys.push(key);
+        if (value === undefined || value === null) delete this.query[key];
+        else this.query[key] = String(value);
+      },
+    };
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    el.context = { ...createContext(fs, "persist-keys"), navigation: nav };
+    await wait(8);
+    el.shadowRoot.querySelector(".os-change-toggle").fire("click");
+    await wait(8);
+    el.shadowRoot.querySelector("#openspec-tab-specs").fire("click");
+    await wait(8);
+    el.disconnectedCallback();
+    assert.ok(keys.length > 0, "la selezione deve essere persistita");
+    for (const key of keys) {
+      assert.match(key, /^[a-z][a-z0-9.-]*$/, `chiave rifiutata dall'host: ${key}`);
+    }
   });
 });
 
@@ -1397,6 +1449,251 @@ describe("migliorie: validità OpenSpec", () => {
     const result = inspectChangeValidity({ proposalText: null, hasProposal: true, specFiles: [], hasSpecs: true });
     assert.strictEqual(result.state, "unverified");
     assert.strictEqual(result.checked, false);
+  });
+});
+
+
+describe("review: lifecycle, markdown and partial-file regressions", () => {
+  const baseTree = { openspec: { type: "directory" }, "openspec/changes": { type: "directory" } };
+  const proposal = "# Title\n\n## Why\n\n" + "x".repeat(60) + "\n\n## What Changes\n- feature\n";
+  const spec = "## ADDED Requirements\n### Requirement: R\nThe system SHALL work.\n#### Scenario: S\n- WHEN ready\n- THEN works\n";
+
+  test("malformed fenced-code lines do not hang the Markdown parser", () => {
+    for (const input of ["\x60\x60\x60js\x60oops", "~~~js\x60oops"]) {
+      const fragment = renderMarkdown(input + "\nNext line");
+      assert.strictEqual(fragment.children.length, 1);
+      assert.strictEqual(fragment.children[0].tag, "p");
+    }
+  });
+
+  test("changing workspace releases a pending manual refresh", async () => {
+    const fsA = createMockFs({ tree: baseTree });
+    const fsB = createMockFs({ tree: baseTree });
+    const original = fsA.listFiles.bind(fsA);
+    let delay = false, release;
+    fsA.listFiles = async (path) => {
+      if (delay && path === "openspec") await new Promise(resolve => { release = resolve; });
+      return original(path);
+    };
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    try {
+      el.context = createContext(fsA, "review-switch-a");
+      await wait(8);
+      delay = true;
+      const refresh = el.shadowRoot.querySelector("#openspec-refresh");
+      refresh.fire("click");
+      assert.strictEqual(refresh.getAttribute("aria-busy"), "true");
+      await Promise.resolve();
+      assert.strictEqual(typeof release, "function");
+      el.context = createContext(fsB, "review-switch-b");
+      await wait(8);
+      release();
+      await wait(8);
+      assert.strictEqual(refresh.getAttribute("aria-busy"), "false");
+      const before = fsB.calls.list;
+      refresh.fire("click");
+      await wait(8);
+      assert.ok(fsB.calls.list > before);
+    } finally {
+      if (release) release();
+      el.disconnectedCallback();
+    }
+  });
+
+
+  test("replacing the context object for the same workspace unblocks refresh", async () => {
+    const files = createMockFs({ tree: baseTree });
+    const original = files.listFiles.bind(files);
+    let stall = false, release;
+    files.listFiles = async (path) => {
+      if (stall && path === "openspec") await new Promise(resolve => { release = resolve; });
+      return original(path);
+    };
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    try {
+      const ctx = createContext(files, "review-same-context");
+      el.context = ctx;
+      await wait(8);
+      stall = true;
+      const btn = el.shadowRoot.querySelector("#openspec-refresh");
+      btn.fire("click");
+      await Promise.resolve();
+      assert.strictEqual(typeof release, "function");
+      el.context = { ...ctx }; // PI WEB can recreate context for the same workspace
+      await wait(8);
+      stall = false;
+      release();
+      await wait(8);
+      assert.strictEqual(btn.getAttribute("aria-busy"), "false");
+      const before = files.calls.list;
+      btn.fire("click");
+      await wait(8);
+      assert.ok(files.calls.list > before, "refresh must be usable after same-workspace context replacement");
+    } finally {
+      if (release) release();
+      el.disconnectedCallback();
+    }
+  });
+
+  test("il cambio di oggetto context non lascia il dettaglio su 'Loading change…'", async () => {
+    const tree = {
+      ...baseTree,
+      "openspec/changes/x": { type: "directory" },
+      "openspec/changes/x/proposal.md": { type: "file" },
+      "openspec/changes/x/specs": { type: "directory" },
+      "openspec/changes/x/specs/alpha": { type: "directory" },
+      "openspec/changes/x/specs/alpha/spec.md": { type: "file" },
+    };
+    const files = createMockFs({
+      tree,
+      contents: {
+        "openspec/changes/x/proposal.md": proposal,
+        "openspec/changes/x/specs/alpha/spec.md": spec,
+      },
+    });
+    const original = files.listFiles.bind(files);
+    let stall = false, release;
+    files.listFiles = async (path) => {
+      if (stall && String(path).replace(/\/+$/, "") === "openspec/changes/x") await new Promise(resolve => { release = resolve; });
+      return original(path);
+    };
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    try {
+      const ctx = createContext(files, "review-detail-context");
+      el.context = ctx;
+      await wait(8);
+      stall = true;
+      el.shadowRoot.querySelector(".os-change-toggle").fire("click");
+      await wait(2);
+      assert.strictEqual(typeof release, "function");
+      // l'host sostituisce l'oggetto context restando sullo stesso workspace
+      el.context = { ...ctx };
+      await wait(4);
+      stall = false;
+      release();
+      await wait(12);
+      const detail = el.shadowRoot.querySelector("#openspec-detail");
+      assert.ok(detail, "il dettaglio e' ancora a schermo");
+      assert.ok(!detail.textContent.includes("Loading change"), "il dettaglio non deve restare in caricamento");
+      assert.ok(el.shadowRoot.querySelector("#openspec-tab-design"), "le schede del documento devono comparire");
+    } finally {
+      if (release) release();
+      el.disconnectedCallback();
+    }
+  });
+
+  test("il cambio di oggetto context non lascia la scheda documento su 'Loading'", async () => {
+    const tree = {
+      ...baseTree,
+      "openspec/changes/x": { type: "directory" },
+      "openspec/changes/x/proposal.md": { type: "file" },
+      "openspec/changes/x/design.md": { type: "file" },
+    };
+    const files = createMockFs({
+      tree,
+      contents: {
+        "openspec/changes/x/proposal.md": proposal,
+        "openspec/changes/x/design.md": "# Design x\n\n1. primo passo\n2. secondo passo\n",
+      },
+    });
+    const original = files.readFile.bind(files);
+    let stall = false, release;
+    files.readFile = async (path) => {
+      if (stall && path === "openspec/changes/x/design.md") await new Promise(resolve => { release = resolve; });
+      return original(path);
+    };
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    try {
+      const ctx = createContext(files, "review-doc-context");
+      el.context = ctx;
+      await wait(8);
+      el.shadowRoot.querySelector(".os-change-toggle").fire("click");
+      await wait(10);
+      stall = true;
+      el.shadowRoot.querySelector("#openspec-tab-design").fire("click");
+      await wait(2);
+      assert.strictEqual(typeof release, "function");
+      el.context = { ...ctx };
+      await wait(4);
+      stall = false;
+      release();
+      await wait(12);
+      const panel = el.shadowRoot.querySelector("#openspec-tabpanel");
+      assert.ok(panel, "il tabpanel esiste");
+      assert.ok(!panel.textContent.includes("Loading"), "la scheda non deve restare in caricamento");
+      assert.ok(panel.textContent.includes("primo passo"), panel.textContent.slice(0, 80));
+      assert.ok(panel.querySelector("ol"), "lista numerata resa come ol");
+    } finally {
+      if (release) release();
+      el.disconnectedCallback();
+    }
+  });
+
+  async function expectUnverified(kind) {
+    const tree = {
+      ...baseTree,
+      "openspec/changes/x": { type: "directory" },
+      "openspec/changes/x/proposal.md": { type: "file" },
+      "openspec/changes/x/specs": { type: "directory" },
+      "openspec/changes/x/specs/alpha": { type: "directory" },
+      "openspec/changes/x/specs/alpha/spec.md": { type: "file" },
+      ...(kind === "unreadable" ? { "openspec/changes/x/specs/beta": { type: "directory" } } : {}),
+    };
+    const files = createMockFs({
+      tree,
+      contents: {
+        "openspec/changes/x/proposal.md": proposal,
+        "openspec/changes/x/specs/alpha/spec.md": spec,
+      },
+      rejectPaths: kind === "unreadable" ? ["openspec/changes/x/specs/beta"] : [],
+      truncatedReads: kind === "truncated" ? ["openspec/changes/x/specs/alpha/spec.md"] : [],
+    });
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    try {
+      el.context = createContext(files, "review-validation-" + kind);
+      await wait(8);
+      el.shadowRoot.querySelector(".os-change-toggle").fire("click");
+      await wait(12);
+      const badge = el.shadowRoot.querySelector(".os-validity");
+      assert.ok(badge);
+      assert.strictEqual(badge.textContent, "?", "partial reads must not produce structure ok");
+    } finally {
+      el.disconnectedCallback();
+    }
+  }
+
+  test("unreadable spec directory must not produce structure ok", async () => expectUnverified("unreadable"));
+  test("truncated spec must not produce structure ok", async () => expectUnverified("truncated"));
+});
+
+
+describe("review: spec parser and ordered Markdown", () => {
+  test("a delta with only an orphan Scenario is not structure ok", () => {
+    const proposal = "# T\n\n## Why\n\n" + "x".repeat(60) + "\n\n## What Changes\n- feature\n";
+    const spec = "## ADDED Requirements\n\n#### Scenario: Orphan\n- WHEN ready\n- THEN works\n";
+    const result = inspectChangeValidity({
+      proposalText: proposal, hasProposal: true, hasSpecs: true,
+      specFiles: [{ path: "specs/demo/spec.md", content: spec }],
+    });
+    assert.strictEqual(result.state, "invalid");
+    assert.ok(result.reasons.some(r => r.includes("Requirement:")));
+  });
+
+  test("numbered top-level Markdown list renders with ol rather than ul", () => {
+    const fragment = renderMarkdown("1. first step\n2. second step");
+    assert.strictEqual(fragment.children.length, 1);
+    assert.strictEqual(fragment.children[0].tag, "ol");
+    assert.strictEqual(fragment.children[0].children.length, 2);
   });
 });
 
