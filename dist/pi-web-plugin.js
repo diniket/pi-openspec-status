@@ -495,7 +495,7 @@ const MD_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 const MD_TASK = /^\[([ xX])\]\s?([\s\S]*)$/;
 
 function mdList(items) {
-  const root = document.createElement("ul");
+  const root = document.createElement(items[0].ordered ? "ol" : "ul");
   const stack = [{ indent: items[0].indent, list: root }];
   let lastItem = null;
   for (const it of items) {
@@ -752,6 +752,7 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
     }
     const lines = file.content.replace(/\r\n/g, "\n").split("\n");
     let deltas = 0;
+    let requirements = 0;
     let requirement = null;
     let scenarios = 0;
     const closeRequirement = () => {
@@ -771,6 +772,7 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
       if (DELTA_HEADER.test(line)) { deltas++; continue; }
       const req = REQUIREMENT_HEADER.exec(line);
       if (req !== null) {
+        requirements++;
         closeRequirement();
         requirement = { title: req[1].trim() || "(untitled)", text: "", scenarios: 0 };
         continue;
@@ -787,6 +789,7 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
     if (deltas === 0) {
       invalid.push(`${file.path}: no delta header (## ADDED/MODIFIED/REMOVED/RENAMED Requirements)`);
     }
+    if (requirements === 0) invalid.push(`${file.path}: no "### Requirement:" block`);
     if (scenarios === 0) {
       invalid.push(`${file.path}: no "#### Scenario:" block`);
     }
