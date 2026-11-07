@@ -8,7 +8,7 @@ Everything you need to change this plugin without rediscovering the same things 
 src/pi-web-plugin.js    the whole plugin, one file, no imports
 dist/pi-web-plugin.js   byte-identical copy of src, this is what PI WEB serves
 scripts/build.mjs       copies src -> dist, nothing else
-test/run.js             all 56 tests
+test/run.js             90 test definitions (86 baseline + 4 regressions)
 test/dom-stub.js        minimal DOM (elements, shadow roots, querySelector)
 test/fs-mock.js         in-memory workspace file API + context factory
 fixtures/               on-disk sample workspaces, read by createFsFromDir()
@@ -24,10 +24,8 @@ node --test test/run.js      # run the suite
 node scripts/build.mjs       # regenerate dist/ after editing src
 ```
 
-Always edit `src/`, never `dist/`. Nothing checks that the two agree, so run
-`node scripts/build.mjs` after every edit to `src/`. If you want that enforced, add a test
-that compares the two files byte for byte: it is three lines and it would have caught real
-drift during development.
+Always edit `src/`, never `dist/`, and run `node scripts/build.mjs` after each source edit.
+The existing test suite checks byte-for-byte equality of `src/` and `dist/`.
 
 ## The host API, and what it does not give you
 
@@ -100,11 +98,10 @@ that needs to reach a session row has to come from a mechanism the host actually
 
 ## Bounds
 
-`INDEX_MAX_CHANGES = 40` and `INDEX_MAX_RELAYS = 20`. Each change costs up to three reads
+`INDEX_MAX_CHANGES = 40` and `MAX_SPEC_FILES = 12` are independent limits. Each change costs up to three reads
 (directory, `specs/`, `tasks.md`), so without a cap a workspace with hundreds of changes
-turns the first render into hundreds of requests. The cap applies in **both** load paths
-(the panel and the change index); when it bites, `state.truncated` is set and the footer
-says so.
+turns the first render into hundreds of requests. The active-change cap sets `state.truncated`, reported in the timestamp header. The spec-file
+cap is separate, and incomplete spec listings cannot yield `structure ok`.
 
 ## Testing approach
 
@@ -196,3 +193,14 @@ SHALL/MUST and at least one `#### Scenario:`. Too-long requirement text is treat
 like the CLI does. Missing artifacts are `incomplete`, non-conforming artifacts are `invalid`,
 and anything not readable is `unverified` — never a guess. It runs once per selected change
 (one or two extra reads, cached with `DETAIL_TTL_MS`), not on every render.
+
+## Regression checks added after review
+
+The test suite includes four additional cases: invalid Markdown code fences must never hang
+`renderMarkdown`; switching workspaces while a refresh is pending must unblock the next
+manual refresh; unreadable spec directories and truncated spec documents must produce an
+unverified structural result rather than `structure ok`. These run in the Node DOM harness.
+
+PI WEB itself may not restore a deep link with `tool=openspec-status:openspec-status` during
+initial plugin activation. This issue is in the host route restore logic; open the project
+and select the OpenSpec tab as a workaround. No host patch is part of this plugin.
