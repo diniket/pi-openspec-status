@@ -50,9 +50,13 @@ const EXTERNAL_CHECK_MS = 60_000;
 
 // Chiavi di navigazione del pannello (contribution-scoped, per workspace):
 // servono a ripristinare selezione, scheda e file di spec dopo un cambio tool.
-const NAV_CHANGE = "osChange";
-const NAV_TAB = "osTab";
-const NAV_SPEC = "osSpec";
+// L'host 1.202611.0 accetta solo chiavi che rispettano ^[a-z][a-z0-9.-]*$ e
+// rifiuta le maiuscole con un errore (`Invalid contribution navigation key`),
+// quindi niente camelCase: con `osChange` la scrittura falliva, l'errore
+// veniva inghiottito e la persistenza restava muta (verificato in UI).
+const NAV_CHANGE = "os-change";
+const NAV_TAB = "os-tab";
+const NAV_SPEC = "os-spec";
 
 // Regole di validazione OpenSpec 1.15.0 (dist/core/validation/constants.js)
 // riprodotte in sola lettura sui file letti dal pannello.
@@ -1025,16 +1029,26 @@ const cache = new Map();
 const anonymousKeys = new WeakMap();
 let anonymousKeySeq = 0;
 function openSpecKey(context) {
+  if (context === null || typeof context !== "object") return "anonymous:0";
   const machine = context?.machine?.id;
   const workspace = context?.workspace?.id;
   if (machine !== undefined && workspace !== undefined) return `${machine}:${workspace}`;
-  if (context === null || typeof context !== "object") return "anonymous:0";
   let key = anonymousKeys.get(context);
   if (key === undefined) {
     key = `anonymous:${++anonymousKeySeq}`;
     anonymousKeys.set(context, key);
   }
   return key;
+}
+
+// L'host crea un nuovo oggetto context a ogni suo render (l'identita' cambia
+// anche restando sullo stesso workspace). Scartare una risposta solo perche'
+// l'oggetto e' cambiato lasciava il pannello su "Loading change…" per sempre
+// finche' l'utente non riprovava (visto in UI dopo un deep link). Stessa
+// macchina + stesso workspace = stessa sorgente dati; i contesti senza
+// machine/workspace restano distinti per identita'.
+function sameWorkspaceContext(a, b) {
+  return a === b || openSpecKey(a) === openSpecKey(b);
 }
 
 function pruneCache() {
@@ -1801,7 +1815,7 @@ class OpenspecPanelElement extends HTMLElement {
       nav.set(NAV_CHANGE, this.#selected, { replace: true });
       nav.set(NAV_TAB, this.#selected === null ? undefined : this.#tab, { replace: true });
       nav.set(NAV_SPEC, this.#selected === null || this.#tab !== "specs" ? undefined : String(this.#specIndex), { replace: true });
-    } catch { /* host senza navigazione scrivibile: nessuna persistenza */ }
+    } catch { /* host senza navigazione scrivibile (o chiave non valida): nessuna persistenza */ }
   }
 
   // Ripristino al mount (o al ritorno da un altro tool): se la change non
@@ -1858,7 +1872,7 @@ class OpenspecPanelElement extends HTMLElement {
       .then(detail => {
         if (!this.isConnected || this.#generation !== generation) return;
         if (seq !== this.#detailSeq) return; // superata da una selezione/refresh piu' recente
-        if (ctx !== this.#context || this.#selected !== name) return;
+        if (!sameWorkspaceContext(ctx, this.#context) || this.#selected !== name) return;
         this.#detail = detail;
         this.#detailStatus = detail.state === "error" ? "error" : "ready";
         this.#validity = null;
@@ -1869,7 +1883,7 @@ class OpenspecPanelElement extends HTMLElement {
       .catch(err => {
         if (!this.isConnected || this.#generation !== generation) return;
         if (seq !== this.#detailSeq) return;
-        if (ctx !== this.#context || this.#selected !== name) return;
+        if (!sameWorkspaceContext(ctx, this.#context) || this.#selected !== name) return;
         this.#detailStatus = "error";
         this.#detail = { state: "error", name, error: errMessage(err), artifacts: allUnknown(), specs: { state: "absent", files: [], truncated: false, error: null }, errors: [] };
         this._renderDetailOnly();
@@ -1883,7 +1897,7 @@ class OpenspecPanelElement extends HTMLElement {
     const seq = ++this.#validitySeq;
     loadValidation(ctx, name, detail)
       .then(result => {
-        if (!this.isConnected || seq !== this.#validitySeq || ctx !== this.#context || this.#selected !== name || this.#detail !== detail) return;
+        if (!this.isConnected || seq !== this.#validitySeq || !sameWorkspaceContext(ctx, this.#context) || this.#selected !== name || this.#detail !== detail) return;
         this.#validity = result;
         // Il badge di validita' sta sulla card: si ridisegna la lista, non solo
         // il dettaglio.
@@ -2091,7 +2105,7 @@ class OpenspecPanelElement extends HTMLElement {
     this._renderTabPanelContent();
     loadDoc(ctx, path)
       .then(doc => {
-        if (seq !== this.#docSeq || ctx !== this.#context) return;
+        if (seq !== this.#docSeq || !sameWorkspaceContext(ctx, this.#context)) return;
         if (this.#tab !== tabKey) return;
         this.#doc = { status: "ready", path, doc };
         this._renderTabPanelContent();
