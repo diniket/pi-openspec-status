@@ -33,15 +33,34 @@ Read-only: no CLI, no model, no writes.
 
 ## Install
 
+### From npm (recommended)
+
+1. In PI WEB open **Settings → Pi packages** on the machine where the plugin should run.
+2. Enter `npm:pi-openspec-status-web` and choose **Install**.
+3. Open **Settings → PI WEB plugins** and make sure the `openspec-status` plugin is enabled.
+4. Reload the browser page. This is a browser-only plugin: no session-daemon restart is needed.
+
+The equivalent from a terminal on the same machine:
+
+```bash
+pi install npm:pi-openspec-status-web
+```
+
+### From a GitHub checkout (alternative)
+
 ```bash
 git clone https://github.com/diniket/pi-openspec-status.git
 mkdir -p ~/.pi-web/plugins
 ln -s "$PWD/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 ```
 
-Reload the PI WEB page. Requirements: PI WEB 1.202611.0 (plugin API v5), an OpenSpec
+Reload the PI WEB page.
+
+Requirements for both paths: PI WEB 1.202611.0 or newer (plugin API v5), and an OpenSpec
 project in the workspace (`openspec/changes/`). No dependencies and no toolchain: `dist/`
-is a copy of `src/`, committed and byte-identical.
+is a copy of `src/`, committed and byte-identical. The npm package is tagged
+`pi-web.dev-plugin`, `pi-web-plugin` and `pi-package`, so it is discoverable in the
+[PI WEB community plugins directory](https://pi-web.dev/community-plugins).
 
 ## Known Pi Web limitation
 
@@ -116,15 +135,34 @@ i task. Solo lettura: nessuna CLI, nessun modello, nessuna scrittura.
 
 ## Installazione
 
+### Da npm (consigliata)
+
+1. In PI WEB apri **Impostazioni → Pi packages** sulla macchina dove deve girare il plugin.
+2. Inserisci `npm:pi-openspec-status-web` e scegli **Installa**.
+3. Apri **Impostazioni → PI WEB plugins** e verifica che il plugin `openspec-status` sia abilitato.
+4. Ricarica la pagina del browser. È un plugin solo-browser: nessun riavvio del session daemon.
+
+L'equivalente da terminale sulla stessa macchina:
+
+```bash
+pi install npm:pi-openspec-status-web
+```
+
+### Da un checkout GitHub (alternativa)
+
 ```bash
 git clone https://github.com/diniket/pi-openspec-status.git
 mkdir -p ~/.pi-web/plugins
 ln -s "$PWD/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 ```
 
-Ricarica la pagina di PI WEB. Requisiti: PI WEB 1.202611.0 (plugin API v5) e un progetto
+Ricarica la pagina di PI WEB.
+
+Requisiti per entrambe le vie: PI WEB 1.202611.0 o successiva (plugin API v5) e un progetto
 OpenSpec nel workspace (`openspec/changes/`). Nessuna dipendenza e nessun toolchain: `dist/`
-è una copia di `src/`, versionata e byte-identica.
+è una copia di `src/`, versionata e byte-identica. Il pacchetto npm è taggato
+`pi-web.dev-plugin`, `pi-web-plugin` e `pi-package`, quindi è individuabile nella
+[directory dei plugin della community PI WEB](https://pi-web.dev/community-plugins).
 
 ## Limite noto di Pi Web
 

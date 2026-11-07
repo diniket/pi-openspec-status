@@ -1,10 +1,31 @@
 {
   "name": "pi-openspec-status-web",
   "version": "0.1.0",
-  "private": true,
-  "description": "PI WEB browser-only plugin: read-only OpenSpec workspace panel (v5 workspacePanels)",
+  "description": "PI WEB plugin: a read-only OpenSpec tab in the workspace panel — active changes, artifacts, task progress and a structure check.",
+  "keywords": [
+    "pi-web.dev-plugin",
+    "pi-web-plugin",
+    "pi-package",
+    "pi-web",
+    "pi-coding-agent",
+    "openspec"
+  ],
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diniket/pi-openspec-status.git"
+  },
+  "homepage": "https://github.com/diniket/pi-openspec-status#readme",
+  "bugs": {
+    "url": "https://github.com/diniket/pi-openspec-status/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "browserRoot": "dist",
   "piWeb": {
     "plugins": [
@@ -19,5 +40,9 @@
     "build": "node scripts/build.mjs",
     "test": "node --test test/run.js"
   },
-  "files": ["package.json", "dist"]
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
 }
