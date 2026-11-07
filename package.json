@@ -1,0 +1,23 @@
+{
+  "name": "pi-openspec-status-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PI WEB browser-only plugin: read-only OpenSpec workspace panel (v5 workspacePanels)",
+  "license": "MIT",
+  "type": "module",
+  "browserRoot": "dist",
+  "piWeb": {
+    "plugins": [
+      {
+        "id": "openspec-status",
+        "browserRoot": "dist",
+        "module": "dist/pi-web-plugin.js"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/run.js"
+  },
+  "files": ["package.json", "dist"]
+}

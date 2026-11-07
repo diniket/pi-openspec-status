@@ -1,0 +1,35 @@
+# Dependencies are not used at runtime; this is here only for stray local experiments.
+node_modules/
+
+# Logs and scratch
+*.log
+*.tmp
+tmp/
+scratch/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local PI WEB state, if a dev symlinks the plugin in place from inside this checkout
+.pi-web/
+
+# Test output artefacts
+coverage/
+.nyc_output/
+
+# Secrets and local environment (never commit these)
+.env
+.env.*
+*.pem
+*.key
+
+# Local backups / patch rejects
+*.bak
+*.bak-*
+*.orig
+*.rej
+*.patch
