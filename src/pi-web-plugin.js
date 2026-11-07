@@ -1298,6 +1298,13 @@ class OpenspecPanelElement extends HTMLElement {
     // Un altro workspace (anche con una change omonima) non eredita selezione,
     // dettaglio o documento: si riparte dall'elenco.
     if (!sameWorkspace) this._resetSelection();
+    else if (prev !== value && this.#pending) {
+      // L\x27host puo\x27 sostituire il context anche senza cambiare workspace.
+      // Un reload avviato col vecchio oggetto verra\x27 scartato: sblocca la UI.
+      this.#reloadSeq++;
+      this.#pending = false;
+      if (this.#nodes !== null) this._setBusy(false);
+    }
     this._refresh();
   }
 
