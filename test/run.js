@@ -1526,4 +1526,25 @@ describe("review: lifecycle, markdown and partial-file regressions", () => {
   test("truncated spec must not produce structure ok", async () => expectUnverified("truncated"));
 });
 
+
+describe("review: spec parser and ordered Markdown", () => {
+  test("a delta with only an orphan Scenario is not structure ok", () => {
+    const proposal = "# T\n\n## Why\n\n" + "x".repeat(60) + "\n\n## What Changes\n- feature\n";
+    const spec = "## ADDED Requirements\n\n#### Scenario: Orphan\n- WHEN ready\n- THEN works\n";
+    const result = inspectChangeValidity({
+      proposalText: proposal, hasProposal: true, hasSpecs: true,
+      specFiles: [{ path: "specs/demo/spec.md", content: spec }],
+    });
+    assert.strictEqual(result.state, "invalid");
+    assert.ok(result.reasons.some(r => r.includes("Requirement:")));
+  });
+
+  test("numbered top-level Markdown list renders with ol rather than ul", () => {
+    const fragment = renderMarkdown("1. first step\n2. second step");
+    assert.strictEqual(fragment.children.length, 1);
+    assert.strictEqual(fragment.children[0].tag, "ol");
+    assert.strictEqual(fragment.children[0].children.length, 2);
+  });
+});
+
 console.log("OK: suite eseguita");
