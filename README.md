@@ -16,7 +16,13 @@ The plugin only reads workspace files through PI WEB's file API. It does not mod
 
 Tested with **PI WEB 1.202611.0** (plugin API v5). The workspace needs an `openspec/changes/` directory.
 
-From the directory where you want to clone the project:
+**From npm** (recommended). In PI WEB open **Settings → Pi packages**, enter
+`npm:pi-openspec-status-web` and choose **Install**. Then open **Settings → PI WEB plugins**,
+make sure the plugin is enabled, and reload the browser page. It is a browser-only plugin,
+so no session-daemon restart is needed. From a terminal on the same machine the equivalent is
+`pi install npm:pi-openspec-status-web`.
+
+**From a GitHub checkout** (alternative), from the directory where you want to clone it:
 
 ```bash
 git clone https://github.com/diniket/pi-openspec-status.git
@@ -26,7 +32,10 @@ ln -s "$(pwd)/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 
 Reload PI WEB and select the **OpenSpec** tab in a workspace.
 
-The built plugin is already included in `dist/`; you do not need to install dependencies or build it to use it.
+The built plugin is already included in `dist/`, in the npm tarball as well as in the
+repository; you do not need to install dependencies or build it to use it. The package is
+tagged `pi-web.dev-plugin`, `pi-web-plugin` and `pi-package`, so it is listed in the
+[PI WEB community plugins directory](https://pi-web.dev/community-plugins).
 
 ## Notes
 
@@ -51,4 +60,5 @@ MIT licensed. See [LICENSE](LICENSE).
 
 Plugin di sola lettura per visualizzare le change OpenSpec direttamente in PI WEB: stato degli artefatti, avanzamento dei task, documenti Markdown e controllo strutturale di base. Rileva anche le modifiche fatte da terminale o editor esterni, senza modificare i file del progetto.
 
-Per installazione e comandi usa le istruzioni sopra. Il controllo strutturale **non sostituisce** `openspec validate`.
+Per installazione e comandi usa le istruzioni sopra: pacchetto npm `pi-openspec-status-web` da
+**Impostazioni → Pi packages**, oppure il symlink da un checkout GitHub. Il controllo strutturale **non sostituisce** `openspec validate`.
