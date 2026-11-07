@@ -10,8 +10,8 @@ Read-only: no CLI, no model, no writes.
 - **Change list** — one compact card per active change: proposal / design / specs / tasks
   state (colored, `absent` dashed), progress bar, task count (`7 / 14 (50%)`).
 - **Click a change** and its details open under the list: `Proposal`, `Design`, `Specs` and
-  `Tasks` tabs, with the markdown rendered inside the panel. `Specs` lists every file of the
-  change and lets you switch between them. Absent documents, documents that fail to read and
+  `Tasks` tabs, with the markdown rendered inside the panel. `Specs` lists up to 12 spec files per change
+  and lets you switch between them (larger sets are marked truncated). Absent documents, documents that fail to read and
   empty spec folders are three different states, each with its own message.
 - **Tasks** are parsed from the real `tasks.md`: sections, `[x]`/`[ ]` items, per-section
   counts and overall percentage. Read-only, no checkbox can be changed.
@@ -26,14 +26,16 @@ Read-only: no CLI, no model, no writes.
   `incomplete` / `structure!`) for the selected change, with the reasons one click away. It
   reproduces the *structural* rules of `openspec validate` (headings, deltas, SHALL/MUST,
   scenarios) from the files the panel reads — it is not a full CLI run. It appears only for
-  changes actually checked, and task progress is never used to guess it.
-- **Reads only** the workspace through the host `files` API. Nothing is written, no command
-  is run, nothing leaves the machine.
+  changes actually checked, and task progress is never used to guess it. When spec files
+  are unreadable, truncated or only partly enumerated, the result stays unverified.
+- **Reads only** the workspace through the host `files` API. No workspace files are written and no CLI command is run; the plugin
+  itself sends no data directly to third-party services.
 
 ## Install
 
 ```bash
 git clone https://github.com/diniket/pi-openspec-status.git
+mkdir -p ~/.pi-web/plugins
 ln -s "$PWD/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 ```
 
@@ -41,10 +43,14 @@ Reload the PI WEB page. Requirements: PI WEB 1.202611.0 (plugin API v5), an Open
 project in the workspace (`openspec/changes/`). No dependencies and no build step: `dist/`
 is committed and byte-identical to `src/`.
 
+## Known Pi Web limitation
+
+On PI WEB 1.202611.0, opening a saved URL containing `tool=openspec-status:openspec-status` may display `Workspace panel unavailable` during host route restoration. Open the project without this parameter and click **OpenSpec** instead. This is a host startup issue, not an OpenSpec read error.
+
 ## Development
 
 ```bash
-node --test test/run.js     # 63 tests, no dependencies
+node --test test/run.js     # regression suite, no dependencies
 node scripts/build.mjs      # copy src -> dist after editing
 ```
 
@@ -85,8 +91,8 @@ i task. Solo lettura: nessuna CLI, nessun modello, nessuna scrittura.
   / tasks (colorato, `absent` tratteggiato), barra di avanzamento, conteggio task
   (`7 / 14 (50%)`).
 - **Clic su una change** e il dettaglio si apre sotto l'elenco: schede `Proposal`, `Design`,
-  `Specs` e `Tasks`, con il markdown reso dentro il pannello. `Specs` elenca tutti i file
-  della change e permette di passare dall'uno all'altro. Documento assente, documento
+  `Specs` e `Tasks`, con il markdown reso dentro il pannello. `Specs` elenca fino a 12 file spec per change
+  e permette di passare dall'uno all'altro (gli elenchi più grandi sono segnalati come troncati). Documento assente, documento
   illeggibile e cartella specs vuota sono tre stati diversi, ognuno con il suo messaggio.
 - **Task** letti dal vero `tasks.md`: sezioni, voci `[x]`/`[ ]`, conteggi per sezione e
   percentuale complessiva. Solo lettura, nessuna casella modificabile.
@@ -103,14 +109,16 @@ i task. Solo lettura: nessuna CLI, nessun modello, nessuna scrittura.
   `incomplete` / `structure!`) per la change selezionata, con i motivi a un clic. Riproduce le
   regole *strutturali* di `openspec validate` (sezioni, deltas, SHALL/MUST, scenari) sui file
   che il pannello legge: non è un'esecuzione completa del CLI. Compare solo per le change
-  davvero controllate e l'avanzamento dei task non viene mai usato per dedurlo.
-- **Legge soltanto** il workspace tramite l'API `files` dell'host. Non scrive, non esegue
-  comandi, non manda nulla fuori dalla macchina.
+  davvero controllate e l'avanzamento dei task non viene mai usato per dedurlo. Se le spec
+  sono illeggibili, troncate o elencate parzialmente, l'esito resta non verificabile.
+- **Legge soltanto** il workspace tramite l'API `files` dell'host. Non modifica i file del workspace e non esegue comandi CLI; il plugin
+  non invia direttamente dati a servizi di terze parti.
 
 ## Installazione
 
 ```bash
 git clone https://github.com/diniket/pi-openspec-status.git
+mkdir -p ~/.pi-web/plugins
 ln -s "$PWD/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 ```
 
@@ -118,10 +126,14 @@ Ricarica la pagina di PI WEB. Requisiti: PI WEB 1.202611.0 (plugin API v5) e un 
 OpenSpec nel workspace (`openspec/changes/`). Nessuna dipendenza e nessun build: `dist/` è
 versionato ed è byte-identico a `src/`.
 
+## Limite noto di Pi Web
+
+Su PI WEB 1.202611.0, un URL salvato con `tool=openspec-status:openspec-status` può mostrare `Workspace panel unavailable` durante il ripristino della rotta dell'host. Apri il progetto senza questo parametro e seleziona **OpenSpec**. È un problema di avvio dell'host, non di lettura OpenSpec.
+
 ## Sviluppo
 
 ```bash
-node --test test/run.js     # 63 test, nessuna dipendenza
+node --test test/run.js     # suite di regressione, nessuna dipendenza
 node scripts/build.mjs      # copia src -> dist dopo una modifica
 ```
 
