@@ -1450,6 +1450,43 @@ describe("review: lifecycle, markdown and partial-file regressions", () => {
     }
   });
 
+
+  test("replacing the context object for the same workspace unblocks refresh", async () => {
+    const files = createMockFs({ tree: baseTree });
+    const original = files.listFiles.bind(files);
+    let stall = false, release;
+    files.listFiles = async (path) => {
+      if (stall && path === "openspec") await new Promise(resolve => { release = resolve; });
+      return original(path);
+    };
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    try {
+      const ctx = createContext(files, "review-same-context");
+      el.context = ctx;
+      await wait(8);
+      stall = true;
+      const btn = el.shadowRoot.querySelector("#openspec-refresh");
+      btn.fire("click");
+      await Promise.resolve();
+      assert.strictEqual(typeof release, "function");
+      el.context = { ...ctx }; // PI WEB can recreate context for the same workspace
+      await wait(8);
+      stall = false;
+      release();
+      await wait(8);
+      assert.strictEqual(btn.getAttribute("aria-busy"), "false");
+      const before = files.calls.list;
+      btn.fire("click");
+      await wait(8);
+      assert.ok(files.calls.list > before, "refresh must be usable after same-workspace context replacement");
+    } finally {
+      if (release) release();
+      el.disconnectedCallback();
+    }
+  });
+
   async function expectUnverified(kind) {
     const tree = {
       ...baseTree,
