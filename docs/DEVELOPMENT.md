@@ -8,7 +8,7 @@ Everything you need to change this plugin without rediscovering the same things 
 src/pi-web-plugin.js    the whole plugin, one file, no imports
 dist/pi-web-plugin.js   byte-identical copy of src, this is what PI WEB serves
 scripts/build.mjs       copies src -> dist, nothing else
-test/run.js             90 test definitions (86 baseline + 4 regressions)
+test/run.js             93 test definitions (86 baseline + 7 regressions)
 test/dom-stub.js        minimal DOM (elements, shadow roots, querySelector)
 test/fs-mock.js         in-memory workspace file API + context factory
 fixtures/               on-disk sample workspaces, read by createFsFromDir()
@@ -196,10 +196,10 @@ and anything not readable is `unverified` — never a guess. It runs once per se
 
 ## Regression checks added after review
 
-The test suite includes four additional cases: invalid Markdown code fences must never hang
-`renderMarkdown`; switching workspaces while a refresh is pending must unblock the next
-manual refresh; unreadable spec directories and truncated spec documents must produce an
-unverified structural result rather than `structure ok`. These run in the Node DOM harness.
+The test suite includes seven review regressions: malformed Markdown fences, a refresh
+pending across a workspace switch, a new context object for the same workspace, unreadable
+spec directories, truncated spec files, orphan Scenario blocks without any Requirement,
+and numbered Markdown lists. These run in the Node DOM harness.
 
 PI WEB itself may not restore a deep link with `tool=openspec-status:openspec-status` during
 initial plugin activation. This issue is in the host route restore logic; open the project
