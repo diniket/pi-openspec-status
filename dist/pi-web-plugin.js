@@ -644,7 +644,7 @@ export function renderMarkdown(text) {
     const para = [];
     while (i < lines.length && !blank(lines[i]) && !MD_ITEM.test(lines[i])
       && !/^(#{1,6})\s/.test(lines[i]) && !/^\s*>\s?/.test(lines[i])
-      && !/^\s*(`{3,}|~{3,})/.test(lines[i]) && !/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(lines[i])) {
+      && !/^\s*(`{3,}|~{3,})\s*([^`]*)$/.test(lines[i]) && !/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(lines[i])) {
       para.push(lines[i]);
       i++;
     }
@@ -677,6 +677,7 @@ function clearWorkspaceCaches(workspaceKey) {
 async function readSpecList(files, base, detail) {
   const out = { state: "absent", files: [], truncated: false, error: null };
   const root = await safeList(files, `${base}/specs/`);
+  if (root.truncated) out.truncated = true;
   if (root.error) {
     out.state = "error";
     out.error = errMessage(root.error);
@@ -689,8 +690,10 @@ async function readSpecList(files, base, detail) {
     const inner = await safeList(files, `${base}/specs/${cap.name}/`);
     if (inner.error) {
       detail.errors.push(`${cap.name}: ${errMessage(inner.error)}`);
+      out.truncated = true;
       continue;
     }
+    if (inner.truncated) out.truncated = true;
     for (const entry of inner.entries || []) {
       if (entry.type !== "file" || !entry.name.toLowerCase().endsWith(".md")) continue;
       if (found.length >= MAX_SPEC_FILES) { out.truncated = true; break; }
@@ -797,6 +800,9 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
 const validationCache = new Map(); // `${workspaceKey}|${change}` -> { result, loadedAt }
 
 async function loadValidation(context, name, detail) {
+  if (detail.specs.state === "error" || detail.specs.truncated || detail.errors.length > 0) {
+    return { state: "unverified", reasons: ["spec listings incomplete or unreadable"], checked: false };
+  }
   const wsKey = openSpecKey(context);
   const key = `${wsKey}|${name}`;
   const hit = validationCache.get(key);
@@ -807,7 +813,7 @@ async function loadValidation(context, name, detail) {
     const specFiles = [];
     for (const file of detail.specs.files) {
       const doc = await loadDoc(context, file.path);
-      specFiles.push({ path: file.path, content: doc.state === "ok" || doc.state === "truncated" ? doc.content : null });
+      specFiles.push({ path: file.path, content: doc.state === "ok" ? doc.content : null });
     }
     let skipSpecs = false;
     try {
@@ -815,7 +821,7 @@ async function loadValidation(context, name, detail) {
       skipSpecs = /^\s*skip_specs\s*:\s*true\s*$/im.test(meta.content);
     } catch { /* nessun metadata: nessuno skip */ }
     result = inspectChangeValidity({
-      proposalText: proposal.state === "ok" || proposal.state === "truncated" ? proposal.content : null,
+      proposalText: proposal.state === "ok" ? proposal.content : null,
       hasProposal: detail.artifacts.proposal === "present",
       specFiles,
       hasSpecs: detail.specs.state === "present",
@@ -1270,6 +1276,8 @@ class OpenspecPanelElement extends HTMLElement {
   #doc = null;            // { status, path, content, error }
   #docSeq = 0;
   #detailSeq = 0;         // ordine dei load di dettaglio (una risposta vecchia non vince)
+  #reloadSeq = 0;
+  #validitySeq = 0;
   #pending = false;       // un refresh manuale e' in corso
   #timer = null;          // controllo periodico delle modifiche esterne
   #fingerprint = null;    // impronta degli elenchi all'ultima lettura buona
@@ -1294,6 +1302,10 @@ class OpenspecPanelElement extends HTMLElement {
   }
 
   _resetSelection() {
+    this.#reloadSeq++;
+    this.#validitySeq++;
+    this.#pending = false;
+    if (this.#nodes !== null) this._setBusy(false);
     this.#detailSeq++;   // invalida i load di dettaglio in corso
     this.#docSeq++;      // e quelli dei documenti
     this.#selected = null;
@@ -1326,6 +1338,10 @@ class OpenspecPanelElement extends HTMLElement {
 
   disconnectedCallback() {
     this.#generation++;
+    this.#reloadSeq++;
+    this.#validitySeq++;
+    this.#pending = false;
+    if (this.#nodes !== null) this._setBusy(false);
     this.#detailSeq++;
     this.#docSeq++;
     this._stopTimer();
@@ -1514,31 +1530,34 @@ class OpenspecPanelElement extends HTMLElement {
   _manualRefresh() {
     const ctx = this.#context;
     if (ctx === null || ctx.files === undefined || this.#pending) return;
-    this._lastForce = Date.now();
+    this.#lastForce = Date.now();
     this._reload(ctx, { silent: false });
   }
 
   _reload(ctx, { silent }) {
+    const reloadSeq = ++this.#reloadSeq;
     clearWorkspaceCaches(openSpecKey(ctx));
     this.#pending = true;
     if (!silent) this._setBusy(true);
     const generation = this.#generation;
     loadOpenSpecState(ctx, { force: true })
       .then(res => {
-        if (!this.isConnected || this.#generation !== generation || ctx !== this.#context) return;
+        if (!this.isConnected || this.#generation !== generation || reloadSeq !== this.#reloadSeq || ctx !== this.#context) return;
         this.#pending = false;
         this._setBusy(false);
         this._refreshFingerprint(ctx);
         // Le cache del workspace sono state svuotate: il dettaglio aperto va
         // riletto, altrimenti resterebbe a schermo il contenuto precedente.
         this.#detail = null;
+        this.#validitySeq++;
+        this.#validity = null;
         this.#detailStatus = this.#selected === null ? "idle" : "loading";
         this.#doc = null;
         this._renderState(res.state);
         if (this.#selected !== null) this._openChange(this.#selected, { keepTab: true });
       })
       .catch(err => {
-        if (!this.isConnected || this.#generation !== generation || ctx !== this.#context) return;
+        if (!this.isConnected || this.#generation !== generation || reloadSeq !== this.#reloadSeq || ctx !== this.#context) return;
         this.#pending = false;
         this._setBusy(false);
         this._renderState({
@@ -1804,6 +1823,8 @@ class OpenspecPanelElement extends HTMLElement {
     const keepTab = options.keepTab === true && sameChange;
     this.#selected = name;
     if (!sameChange) {
+      this.#validity = null;
+      this.#validitySeq++;
       // Cambio di change: il dettaglio precedente non deve restare a schermo.
       this.#detail = null;
       this.#detailStatus = "loading";
@@ -1849,9 +1870,10 @@ class OpenspecPanelElement extends HTMLElement {
   // cache per TTL): le altre restano senza giudizio.
   _loadValidity(ctx, name, detail) {
     if (detail.state !== "ready") return;
+    const seq = ++this.#validitySeq;
     loadValidation(ctx, name, detail)
       .then(result => {
-        if (!this.isConnected || ctx !== this.#context || this.#selected !== name) return;
+        if (!this.isConnected || seq !== this.#validitySeq || ctx !== this.#context || this.#selected !== name || this.#detail !== detail) return;
         this.#validity = result;
         // Il badge di validita' sta sulla card: si ridisegna la lista, non solo
         // il dettaglio.
