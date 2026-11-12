@@ -1260,6 +1260,35 @@ describe("migliorie: auto-refresh esterno", () => {
   });
 });
 
+describe("regression: archived changes polling", () => {
+  test("archive-only changes update the no-active count without manual refresh", async () => {
+    let archivedNames = ["old-a"];
+    const entry = name => ({ name, type: "directory", size: 0, modifiedAt: null });
+    const files = {
+      async listFiles(path) {
+        const p = path.replace(/\\/$/, "");
+        if (p === "openspec") return { entries: [entry("changes")], truncated: false };
+        if (p === "openspec/changes") return { entries: [entry("archive")], truncated: false };
+        if (p === "openspec/changes/archive") return { entries: archivedNames.map(entry), truncated: false };
+        throw new Error("Path does not exist: " + path);
+      },
+      async readFile() { throw new Error("No active change documents"); },
+    };
+    const el = new OpenspecPanelElement();
+    el.isConnected = true;
+    el.connectedCallback();
+    el.context = createContext(files, "archive-regression");
+    await wait(8);
+    assert.match(el.shadowRoot.textContent, /1 archived/);
+    await el._checkExternalChanges();
+    archivedNames = ["old-a", "old-b"];
+    await el._checkExternalChanges();
+    await wait(10);
+    assert.match(el.shadowRoot.textContent, /2 archived/);
+    el.disconnectedCallback();
+  });
+});
+
 describe("migliorie: persistenza della selezione", () => {
   test("selezione, scheda e file di spec sopravvivono al rimontaggio", async () => {
     const fs = createMockFs({

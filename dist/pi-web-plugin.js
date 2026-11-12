@@ -1424,6 +1424,17 @@ class OpenspecPanelElement extends HTMLElement {
         .sort()
         .slice(0, INDEX_MAX_CHANGES);
       const parts = [];
+      // Archive-only edits must invalidate the no-active state (and its count).
+      // The archived entries are listed once, rather than reading each change.
+      const archivePresent = (top.entries || []).some(e =>
+        e.name === ARCHIVE_DIR && (e.type === "directory" || e.type === "symlink"));
+      if (archivePresent) {
+        const archived = await ctx.files.listFiles(`${CHANGES_DIR}/${ARCHIVE_DIR}/`);
+        const archiveSig = (archived.entries || [])
+          .filter(e => e.type === "directory" || e.type === "symlink")
+          .map(e => e.name).sort().join(",");
+        parts.push(`archive|${archiveSig}|${archived.truncated === true}`);
+      }
       for (const name of names) {
         const base = `${CHANGES_DIR}/${name}`;
         const listing = await ctx.files.listFiles(`${base}/`);
