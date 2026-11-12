@@ -4,17 +4,19 @@ A small, read-only **OpenSpec panel for PI WEB**. It adds an **OpenSpec** tab to
 
 ## What you get
 
-- **Active changes:** see Proposal, Design, Specs and Tasks at a glance, including task counts and progress bars.
-- **Document viewer:** read the Markdown files for a change, browse its specs and see tasks grouped by section.
+- **Loaded changes:** instant name search, task-state/artifact filters and deterministic sorting (name, progress or open tasks). Unknown counts always sort last. No file requests while typing.
+- **Compact operational summary:** loaded changes, task-complete/in-progress changes, known open tasks and unknown counts. Completion is not structural conformity.
+- **Document viewer:** read Markdown, browse specs and filter tasks (all / to complete / completed), with collapsible sections. Selection, filters, section expansion, keyboard focus and scroll survive compatible refreshes.
+- **On-demand archive:** browse archived changes and documents separately; arbitrary directory names are supported. The ordinary poll never walks archive contents.
 - **Updates:** refresh manually, react to file changes reported by PI WEB, or check for edits made in an external editor or terminal every 60 seconds while the panel is active.
 - **Navigation:** open a document in PI WEB's Files tab and return to the same change and document.
-- **Quick structure check:** a small badge flags missing or malformed OpenSpec artifacts. This is **not** a replacement for `openspec validate`; files that cannot be fully read are marked unverified.
+- **Local structural diagnostics:** check the selected change or explicitly **Check all loaded changes**, see progress/results, stop scheduling further checks and jump to a result. This is **not** `openspec validate`; incomplete, unreadable or unsupported inputs remain unverified.
 
 The plugin only reads workspace files through PI WEB's file API. It does not modify projects, run the OpenSpec CLI or require a model or runtime dependencies.
 
 ## Install
 
-Tested with **PI WEB 1.202611.0** (plugin API v5). The workspace needs an `openspec/changes/` directory.
+Verified with **PI WEB 1.202611.1** (plugin API v5): isolated real-shell GUI tests on Cristina use actual host discovery/file/navigation APIs and synthetic projects. Separate Chromium harness tests still use simulated host APIs. See [consolidation evidence](docs/CONSOLIDATION.md) for coverage and remaining limits. The workspace needs an `openspec/changes/` directory.
 
 **From npm** (recommended). In PI WEB open **Settings → Pi packages**, enter
 `npm:pi-openspec-status-web` and choose **Install**. Then open **Settings → PI WEB plugins**,
@@ -32,6 +34,10 @@ ln -s "$(pwd)/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 
 Reload PI WEB and select the **OpenSpec** tab in a workspace.
 
+For managed production, prefer a verified immutable package release rather than a writable Git
+checkout. The prepared [PUCP integration](docs/PUCP-INTEGRATION.md) is inactive pending approval;
+never repoint the existing live checkout to test a feature. Develop in a separate worktree.
+
 The built plugin is already included in `dist/`, in the npm tarball as well as in the
 repository; you do not need to install dependencies or build it to use it. The package is
 tagged `pi-web.dev-plugin`, `pi-web-plugin` and `pi-package`, so it is listed in the
@@ -39,7 +45,11 @@ tagged `pi-web.dev-plugin`, `pi-web-plugin` and `pi-package`, so it is listed in
 
 ## Notes
 
-- The panel shows up to **40 active changes** and **12 spec files per selected change**; larger lists are marked as truncated.
+- Each collection shows at most **40 changes**, chosen by deterministic name order, and **12 spec files / capability folders per detail**. Search, sorting and metrics concern **loaded data only**, never the entire project when listings are partial. The host itself caps directory listings at 1,000 entries and has no pagination API.
+- Not started includes known zero-item files; task-complete requires at least one task. Missing, binary, truncated or unreadable tasks have **unknown counts**, not zero. The artifact filter includes optional Design: it is not a validity verdict.
+- Archive loading is explicit (including after restoring an archive navigation link). Use Refresh or host invalidation for archive updates; only the existing archive-directory count in the no-active view is polled.
+- Requests have a 15-second end-to-end timeout, including queue wait, and scans a 60-second deadline; the host receives an AbortSignal. Six host calls maximum per workspace, two batch change workers. Stop prevents new changes and subsequent validation reads; a shared in-flight detail/read can finish (bounded by timeout), so another consumer is never cancelled.
+- A timed-out host that ignores AbortSignal may keep its own transport alive; the plugin still settles the Promise, releases UI busy state and handles late responses/rejections. No backend can be forcibly cancelled by a browser-only plugin.
 - The structure badge is only a quick check of the files the panel can read. For full validation, use the OpenSpec CLI.
 - In PI WEB 1.202611.0, opening a bookmarked URL containing `tool=openspec-status:openspec-status` can show **Workspace panel unavailable** during startup. Opening the workspace first and clicking **OpenSpec** works around this host-side issue.
 
@@ -48,9 +58,13 @@ tagged `pi-web.dev-plugin`, `pi-web-plugin` and `pi-package`, so it is listed in
 ```bash
 npm test            # Node regression tests
 npm run build       # copy src/pi-web-plugin.js to dist/
+npm run benchmark   # synthetic polling latency/concurrency (5ms per host call)
 ```
 
 The source is in `src/pi-web-plugin.js`; `dist/pi-web-plugin.js` must stay identical. See [development notes](docs/DEVELOPMENT.md) for internals.
+
+Short [Pi Agent operational guide](docs/AGENT-OPERATIONS.md), [release procedure](docs/RELEASE.md),
+[changelog](CHANGELOG.md), [second independent review](docs/SECOND-REVIEW.md).
 
 MIT licensed. See [LICENSE](LICENSE).
 
@@ -58,10 +72,16 @@ MIT licensed. See [LICENSE](LICENSE).
 
 ### Italiano
 
-Plugin di sola lettura per visualizzare le change OpenSpec direttamente in PI WEB: stato degli artefatti, avanzamento dei task, documenti Markdown e controllo strutturale di base. Rileva anche le modifiche fatte da terminale o editor esterni, senza modificare i file del progetto.
+Plugin di sola lettura per visualizzare le change OpenSpec direttamente in PI WEB: stato degli artefatti, avanzamento dei task, documenti Markdown e controllo strutturale di base. Rileva anche le modifiche fatte da terminale o editor esterni, senza modificare i file del progetto. Include ricerca e filtri sulle sole change caricate (massimo 40 per elenco), riepilogo operativo, task filtrabili con sezioni comprimibili, archivio su richiesta e diagnostica strutturale batch interrompibile. I conteggi sconosciuti non sono zeri; task completati non significa conformità strutturale.
 
 Per installazione e comandi usa le istruzioni sopra: pacchetto npm `pi-openspec-status-web` da
 **Impostazioni → Pi packages**, oppure il symlink da un checkout GitHub. Il controllo strutturale **non sostituisce** `openspec validate`.
+
+Collaudo aggiuntivo nella vera shell PI WEB1.202611.1 su Cristina, con progetti sintetici e
+istanza isolata: [evidenze e limiti](docs/CONSOLIDATION.md). Per produzione gestita è preparato
+un bundle PUCP inattivo con package immutabile e rollback verificato; serve il GO esplicito,
+non è stato distribuito. Sviluppare solo in un worktree separato, senza modificare checkout o
+symlink live. [Guida operativa breve per Pi Agent](docs/AGENT-OPERATIONS.md).
 
 ### Hardening notes
 
@@ -90,7 +110,9 @@ and proposal sections are located textually as the CLI does. The check remains s
 than default `openspec validate` where the CLI only warns: a missing SHALL/MUST is an
 error (like `openspec validate --strict`), and a `Why` section shorter than 50 characters
 or a missing `proposal.md` are reported as well. Those are the only known divergences and
-they never make an invalid change look valid.
+they are conservative local checks, not a guarantee of complete CLI equivalence. Custom schemas and unsupported metadata are also unverified.
+
+See [workspace experience evidence](docs/WORKSPACE-EXPERIENCE.md) for tests, reproducible before/after benchmarks, cancellation semantics and integration limits. This evolution has not been published to npm; use its PR checkout when reviewing it.
 
 An optional real-browser smoke check is available as `python scripts/browser-smoke.py`
 with Python Playwright and `/usr/bin/chromium` installed. It serves the checkout locally,

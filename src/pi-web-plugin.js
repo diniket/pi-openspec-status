@@ -57,6 +57,133 @@ const EXTERNAL_CHECK_MS = 60_000;
 const NAV_CHANGE = "os-change";
 const NAV_TAB = "os-tab";
 const NAV_SPEC = "os-spec";
+const NAV_VIEW = "os-view";
+const NAV_SEARCH = "os-search";
+const NAV_FILTER = "os-filter";
+const NAV_SORT = "os-sort";
+const NAV_TASKS = "os-tasks";
+
+export const REQUEST_LIMITS = Object.freeze({ timeoutMs: 15_000, operationTimeoutMs: 60_000, concurrency: 6, batchConcurrency: 2 });
+let requestTimeoutMs = REQUEST_LIMITS.timeoutMs;
+export function setRequestTimeoutMs(ms) { requestTimeoutMs = ms; }
+const runtimes = new Map();
+const probeFlights = new Map();
+const READ_CONTEXT_KEY = Symbol("OpenSpec workspace identity");
+function runtimeFor(context) {
+  if (context._openspecRuntime) return context._openspecRuntime;
+  const key = openSpecKey(context);
+  let r = runtimes.get(key);
+  if (!r) {
+    r = { owners: new Set(), running: 0, queue: [], requests: new Set(), touched: Date.now() };
+    runtimes.set(key, r);
+    for (const [k, old] of runtimes) if (k !== key && !old.owners.size && !old.requests.size && (runtimes.size > 32 || Date.now() - old.touched > CACHE_MAX_AGE_MS)) runtimes.delete(k);
+  }
+  r.touched = Date.now();
+  return r;
+}
+function releaseWorkspace(context, owner) {
+  if (!context) return;
+  const r = runtimes.get(openSpecKey(context));
+  if (!r) return;
+  r.owners.delete(owner);
+  if (r.owners.size) return;
+  r.closed = true;
+  runtimes.delete(openSpecKey(context));
+  for (const cancel of [...r.requests]) cancel();
+  clearWorkspaceCaches(openSpecKey(context));
+  probeFlights.delete(openSpecKey(context));
+}
+// A shared request belongs to the workspace, never to its first panel.
+function readContext(context) {
+  return { ...context, [READ_CONTEXT_KEY]: openSpecKey(context), _openspecRuntime: runtimeFor(context), _openspecDeadline: context._openspecDeadline ?? Date.now() + REQUEST_LIMITS.operationTimeoutMs };
+}
+function workspaceFiles(context) {
+  const r = runtimeFor(context);
+  const invoke = (method, path) => new Promise((resolve, reject) => {
+    if (r.closed) { reject(new DOMException("Workspace request cancelled", "AbortError")); return; }
+    const timeout = Math.min(requestTimeoutMs, (context._openspecDeadline ?? Infinity) - Date.now());
+    if (timeout <= 0) {
+      const error = new Error("OpenSpec operation timed out; refresh to retry"); error.name = "TimeoutError"; reject(error); return;
+    }
+    const controller = new AbortController();
+    let done = false, started = false, timer;
+    const finish = (error, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      r.requests.delete(cancel);
+      const i = r.queue.indexOf(start);
+      if (i >= 0) r.queue.splice(i, 1);
+      if (started) r.running--;
+      if (error) reject(error); else resolve(value);
+      if (r.running < REQUEST_LIMITS.concurrency) r.queue.shift()?.();
+    };
+    const cancel = () => { finish(new DOMException("Workspace request cancelled", "AbortError")); controller.abort(); };
+    const start = () => {
+      if (done) return;
+      if (r.closed) { cancel(); return; }
+      started = true;
+      r.running++;
+      try {
+        Promise.resolve(context.files[method](path, { signal: controller.signal }))
+          .then(value => finish(null, value), error => finish(error));
+      } catch (error) { finish(error); }
+    };
+    r.requests.add(cancel);
+    timer = setTimeout(() => {
+      const error = new Error(`${started ? "Request" : "Request queue"} timed out after ${timeout} ms: ${path}`);
+      error.name = "TimeoutError";
+      finish(error);
+      controller.abort();
+    }, timeout);
+    if (r.running < REQUEST_LIMITS.concurrency) start(); else r.queue.push(start);
+  });
+  return { listFiles: path => invoke("listFiles", path), readFile: path => invoke("readFile", path) };
+}
+async function mapLimited(items, limit, work) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const i = next++; results[i] = await work(items[i], i); }
+  }));
+  return results;
+}
+const compareName = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const CHANGE_FILTERS = ["all", "not-started", "in-progress", "completed", "unknown", "artifacts"];
+const CHANGE_SORTS = ["name-asc", "name-desc", "progress-asc", "progress-desc", "open-tasks"];
+export function selectChanges(changes, { search = "", filter = "all", sort = "name-asc" } = {}) {
+  const query = search.toLowerCase();
+  return changes.filter(ch => {
+    if (!ch.name.toLowerCase().includes(query)) return false;
+    const t = ch.tasks;
+    if (filter === "unknown") return t?.known !== true;
+    if (filter === "artifacts") return Object.values(ch.artifacts || {}).some(v => v !== "present");
+    if (filter === "all") return true;
+    if (t?.known !== true) return false;
+    if (filter === "not-started") return t.completed === 0;
+    if (filter === "in-progress") return t.completed > 0 && t.completed < t.total;
+    return filter === "completed" && t.total > 0 && t.completed === t.total;
+  }).sort((a, b) => {
+    if (sort === "name-asc") return compareName(a.name, b.name);
+    if (sort === "name-desc") return compareName(b.name, a.name);
+    const value = ch => ch.tasks?.known !== true || (sort !== "open-tasks" && ch.tasks.total === 0) ? null
+      : sort === "open-tasks" ? ch.tasks.total - ch.tasks.completed : ch.tasks.completed / ch.tasks.total;
+    const av = value(a), bv = value(b);
+    if (av === null || bv === null) return (av === null) - (bv === null) || compareName(a.name, b.name);
+    return (sort === "progress-desc" ? bv - av : av - bv) || compareName(a.name, b.name);
+  });
+}
+export function workspaceSummary(changes) {
+  const s = { loaded: changes.length, completed: 0, inProgress: 0, openTasks: 0, unknown: 0 };
+  for (const ch of changes) {
+    const t = ch.tasks;
+    if (t?.known !== true) { s.unknown++; continue; }
+    s.openTasks += t.total - t.completed;
+    if (t.total > 0 && t.completed === t.total) s.completed++;
+    else if (t.completed > 0 && t.completed < t.total) s.inProgress++;
+  }
+  return s;
+}
 
 // Regole di validazione OpenSpec 1.15.0 (dist/core/validation/constants.js)
 // riprodotte in sola lettura sui file letti dal pannello.
@@ -332,6 +459,22 @@ const PANEL_CSS = `
 .os-open-file:hover { background: var(--pi-surface-hover); border-color: var(--pi-accent-border); }
 .os-open-file:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
 
+.os-controls { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; min-width: 0; }
+.os-controls input, .os-controls select, .os-controls button, .os-task-filters button, .os-diagnostics button {
+  font: inherit; color: var(--pi-text); background: var(--pi-surface); border: 1px solid var(--pi-border-muted); border-radius: 6px; padding: 3px 6px; min-width: 0; max-width: 100%;
+}
+.os-controls input { flex: 1 1 130px; width: 100%; }
+.os-controls select { flex: 1 1 110px; }
+.os-controls :focus-visible, .os-task-filters :focus-visible, .os-diagnostics :focus-visible, summary:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
+.os-summary, .os-scope { font-size: 10px; color: var(--pi-muted); margin: 4px 0 8px; }
+.os-task-filters { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+.os-task-filters [aria-pressed="true"] { border-color: var(--pi-accent); color: var(--pi-accent); }
+.os-task-group summary { cursor: pointer; }
+.os-diagnostics { margin: 8px 0; font-size: 10px; overflow-wrap: anywhere; }
+.os-diagnostics ul { max-height: 180px; overflow: auto; padding-left: 18px; }
+.os-header { flex-wrap: wrap; }
+.os-change-toggle { flex-wrap: wrap; }
+.os-change-toggle .name { flex-basis: 110px; }
 @media (prefers-reduced-motion: reduce) {
   .os-refresh--busy { animation: none; }
 }
@@ -695,12 +838,15 @@ function pruneReadCache(store) {
   }
 }
 
-function clearWorkspaceCaches(workspaceKey) {
+function clearWorkspaceCaches(workspaceKey, { index = true } = {}) {
   const prefix = `${workspaceKey}|`;
   for (const key of [...validationCache.keys()]) if (key.startsWith(prefix)) validationCache.delete(key);
   for (const key of [...detailCache.keys()]) if (key.startsWith(prefix)) detailCache.delete(key);
   for (const key of [...docCache.keys()]) if (key.startsWith(prefix)) docCache.delete(key);
-  cache.delete(workspaceKey);
+  if (index) {
+    cache.delete(workspaceKey);
+    cache.delete(`${workspaceKey}|archive`);
+  }
 }
 
 async function readSpecList(files, base, detail) {
@@ -712,7 +858,7 @@ async function readSpecList(files, base, detail) {
     out.error = errMessage(root.error);
     return out;
   }
-  const allCaps = root.entries.filter(e => e.type === "directory" || e.type === "symlink");
+  const allCaps = root.entries.filter(e => e.type === "directory" || e.type === "symlink").sort((a, b) => compareName(a.name, b.name));
   const caps = allCaps.slice(0, MAX_SPEC_FILES);
   if (allCaps.length > caps.length) out.truncated = true;
   const found = [];
@@ -887,10 +1033,11 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
 
 const validationCache = new Map(); // `${workspaceKey}|${change}` -> { result, loadedAt }
 
-async function loadValidation(context, name, detail) {
+async function loadValidation(context, name, detail, { shouldContinue = () => true } = {}) {
   if (detail.specs.state === "error" || detail.specs.truncated || detail.errors.length > 0) {
     return { state: "unverified", reasons: ["spec listings incomplete or unreadable"], checked: false };
   }
+  context = readContext(context);
   const wsKey = openSpecKey(context);
   const key = `${wsKey}|${name}`;
   pruneReadCache(validationCache);
@@ -902,14 +1049,22 @@ async function loadValidation(context, name, detail) {
     const proposal = await loadDoc(context, `${CHANGES_DIR}/${name}/proposal.md`);
     const specFiles = [];
     for (const file of detail.specs.files) {
+      if (!shouldContinue()) return { state: "unverified", reasons: ["Checks stopped"], checked: false };
       const doc = await loadDoc(context, file.path);
       specFiles.push({ path: file.path, content: doc.state === "ok" ? doc.content : null });
     }
+    if (!shouldContinue()) return { state: "unverified", reasons: ["Checks stopped"], checked: false };
     let skipSpecs = false;
     try {
-      const meta = await context.files.readFile(`${CHANGES_DIR}/${name}/.openspec.yaml`);
-      skipSpecs = /^\s*skip_specs\s*:\s*true\s*$/im.test(meta.content);
-    } catch { /* nessun metadata: nessuno skip */ }
+      const meta = detail.metadataPresent ? await workspaceFiles(context).readFile(`${CHANGES_DIR}/${name}/.openspec.yaml`) : { content: "" };
+      skipSpecs = /^\s*skip_specs\s*:/im.test(meta.content) && !/^\s*skip_specs\s*:\s*false\s*$/im.test(meta.content);
+      const schema = /^schema\s*:\s*(.+)\s*$/im.exec(meta.content);
+      if (schema && schema[1].trim() !== "spec-driven") return { state: "unverified", reasons: ["custom or unsupported schema metadata requires OpenSpec CLI validation"], checked: false };
+      if (meta.truncated || meta.binary || typeof meta.content !== "string") return { state: "unverified", reasons: ["metadata incomplete or unreadable"], checked: false };
+    } catch (error) {
+      // Do not trust failed metadata reads when its directory entry exists.
+      if (detail.metadataPresent) return { state: "unverified", reasons: [`metadata not readable: ${errMessage(error)}`], checked: false };
+    }
     result = inspectChangeValidity({
       proposalText: proposal.state === "ok" ? proposal.content : null,
       hasProposal: detail.artifacts.proposal === "present",
@@ -925,7 +1080,7 @@ async function loadValidation(context, name, detail) {
 }
 
 async function readChangeDetail(context, name) {
-  const files = context.files;
+  const files = workspaceFiles(context);
   const base = `${CHANGES_DIR}/${name}`;
   const detail = {
     state: "ready", name, artifacts: allUnknown(),
@@ -938,6 +1093,7 @@ async function readChangeDetail(context, name) {
     detail.error = `Cannot read ${base}/: ${errMessage(listing.error)}`;
     return detail;
   }
+  detail.metadataPresent = listing.entries.some(e => e.name === ".openspec.yaml");
   detail.artifacts = classifyArtifacts(listing.entries);
   if (listing.truncated) {
     detail.errors.push("Change directory listing truncated");
@@ -963,7 +1119,7 @@ export function loadChangeDetail(context, name) {
   }
   if (entry.detail !== null && Date.now() - entry.loadedAt < DETAIL_TTL_MS) return Promise.resolve(entry.detail);
   if (entry.inFlight !== null) return entry.inFlight;
-  entry.inFlight = readChangeDetail(context, name)
+  entry.inFlight = readChangeDetail(readContext(context), name)
     .then(detail => {
       entry.detail = detail;
       entry.loadedAt = Date.now();
@@ -985,7 +1141,8 @@ export function loadDoc(context, path, { maxAge = DETAIL_TTL_MS } = {}) {
   }
   if (entry.doc !== null && Date.now() - entry.loadedAt < maxAge) return Promise.resolve(entry.doc);
   if (entry.inFlight !== null) return entry.inFlight;
-  entry.inFlight = Promise.resolve().then(() => context.files.readFile(path))
+  const files = workspaceFiles(context);
+  entry.inFlight = Promise.resolve().then(() => files.readFile(path))
     .then(res => {
       if (!res || typeof res.content !== "string") throw new Error("Malformed file response");
       if (res.binary) return { state: "binary", path, error: "binary file" };
@@ -1074,6 +1231,7 @@ const anonymousKeys = new WeakMap();
 let anonymousKeySeq = 0;
 function openSpecKey(context) {
   if (context === null || typeof context !== "object") return "anonymous:0";
+  if (context[READ_CONTEXT_KEY]) return context[READ_CONTEXT_KEY];
   const machine = context?.machine?.id;
   const workspace = context?.workspace?.id;
   if (machine != null && workspace != null) return JSON.stringify([machine, workspace]);
@@ -1117,8 +1275,8 @@ function errMessage(err) {
   return (err && typeof err.message === "string" && err.message) || String(err);
 }
 
-async function loadState(context) {
-  const files = context.files;
+async function loadState(context, archive = false) {
+  const files = workspaceFiles(context);
   const state = {
     kind: "ready",
     changes: [],
@@ -1135,13 +1293,19 @@ async function loadState(context) {
     // messaggi d'errore.
     const openspec = await safeList(files, "openspec");
     if (openspec.error) {
-      state.kind = "not-found";
-      state.error = "No OpenSpec project in this workspace.";
+      state.kind = openspec.error?.name === "TimeoutError" || openspec.error?.name === "AbortError" ? "error" : "not-found";
+      state.error = state.kind === "error" ? errMessage(openspec.error) : "No OpenSpec project in this workspace.";
       return state;
     }
     if (openspec.truncated) state.truncated = true;
 
-    const changesDir = await safeList(files, CHANGES_DIR);
+    if (archive) {
+      const parent = await safeList(files, CHANGES_DIR);
+      if (parent.error) { state.kind = "error"; state.error = `Cannot read archive parent: ${errMessage(parent.error)}`; return state; }
+      if (!parent.truncated && !parent.entries.some(e => e.name === ARCHIVE_DIR && ["directory", "symlink"].includes(e.type))) { state.kind = "no-active"; return state; }
+      if (parent.truncated) state.truncated = true;
+    }
+    const changesDir = await safeList(files, archive ? `${CHANGES_DIR}/${ARCHIVE_DIR}` : CHANGES_DIR);
     if (changesDir.error) {
       state.kind = "error";
       state.error = `OpenSpec read error: ${errMessage(changesDir.error)}.`;
@@ -1153,27 +1317,28 @@ async function loadState(context) {
     // dira' se il bersaglio e' leggibile).
     const dirish = e => e.type === "directory" || e.type === "symlink";
     const allActive = changesDir.entries
-      .filter(e => dirish(e) && e.name !== ARCHIVE_DIR);
+      .filter(e => dirish(e) && (archive || e.name !== ARCHIVE_DIR));
     // Stesso tetto dell'indice: ogni change costa fino a 3 letture (elenco,
     // specs/, tasks.md). Senza tetto un workspace con centinaia di change
     // genererebbe centinaia di richieste al primo render del pannello.
-    const active = allActive.sort((a, b) => a.name.localeCompare(b.name)).slice(0, INDEX_MAX_CHANGES);
+    const active = allActive.sort((a, b) => compareName(a.name, b.name)).slice(0, INDEX_MAX_CHANGES);
     if (allActive.length > active.length) state.truncated = true;
 
     if (active.length === 0) {
       state.kind = "no-active";
-      state.archiveCount = await countArchived(files);
+      state.archiveCount = archive ? null : await countArchived(files);
       return state;
     }
 
     const changes = [];
-    for (const ch of active) {
-      const base = `${CHANGES_DIR}/${ch.name}/`;
+    await mapLimited(active, REQUEST_LIMITS.concurrency, async ch => {
+      const relativeName = archive ? `${ARCHIVE_DIR}/${ch.name}` : ch.name;
+      const base = `${CHANGES_DIR}/${relativeName}/`;
       const listing = await safeList(files, base);
       if (listing.error) {
         state.errors.push(`${ch.name}: ${errMessage(listing.error)}`);
-        changes.push({ name: ch.name, artifacts: allUnknown(), tasks: unknownTasks(), error: "Cannot read change directory" });
-        continue;
+        changes.push({ name: ch.name, artifacts: allUnknown(), tasks: unknownTasks(), error: `Cannot read change directory: ${errMessage(listing.error)}` });
+        return;
       }
       if (listing.truncated) state.truncated = true;
       const artifacts = classifyArtifacts(listing.entries);
@@ -1194,15 +1359,15 @@ async function loadState(context) {
       // presente.
       let tasks;
       if (artifacts.tasks === "present") {
-        tasks = await countTasks(context, ch.name);
+        tasks = await countTasks(context, relativeName);
         if (tasks.error) state.errors.push(`${ch.name}: ${tasks.error}`);
       } else {
         tasks = unknownTasks();
       }
       // shape costante: error sempre presente (null in caso di successo).
       changes.push({ name: ch.name, artifacts, tasks, error: null });
-    }
-    state.changes = changes;
+    });
+    state.changes = changes.sort((a, b) => compareName(a.name, b.name));
     return state;
   } catch (err) {
     state.kind = "error";
@@ -1213,8 +1378,8 @@ async function loadState(context) {
 
 // L'orario si marca a lettura finita: con molte richieste in serie quello di
 // inizio sarebbe gia' vecchio quando il pannello lo mostra.
-async function doLoad(context) {
-  const state = await loadState(context);
+async function doLoad(context, archive = false) {
+  const state = await loadState(readContext(context), archive);
   state.scannedAt = new Date().toISOString();
   return state;
 }
@@ -1303,8 +1468,8 @@ function makeCacheEntry() {
 // valida entro il TTL (e force=false); cacheHit=false per un fetch nuovo o
 // coalesced su un fetch in flight.
 export function loadOpenSpecState(context, options = {}) {
-  const { force = false } = options || {};
-  const key = openSpecKey(context);
+  const { force = false, archive = false } = options || {};
+  const key = openSpecKey(context) + (archive ? "|archive" : "");
   let entry = cache.get(key);
   if (entry === undefined) {
     entry = makeCacheEntry();
@@ -1320,7 +1485,8 @@ export function loadOpenSpecState(context, options = {}) {
   // (o reject) lo metti a null: un fetch terminato non va più coalesced e
   // un nuovo richiamo (anche force) riparte un fetch fresco.
   if (entry.inFlight !== null) return entry.inFlight;
-  entry.inFlight = doLoad(context)
+  if (force) entry.forcedAt = Date.now();
+  entry.inFlight = doLoad(context, archive)
     .then(state => {
       entry.state = state;
       entry.loadedAt = Date.now();
@@ -1376,6 +1542,19 @@ class OpenspecPanelElement extends HTMLElement {
   #probeSeq = 0;          // ordine delle sonde: vince sempre la piu' recente
   #probing = false;       // una sonda e' in corso (niente richieste concorrenti)
   #restored = false;      // il ripristino da navigation e' gia' stato tentato
+  #mode = "active";
+  #search = "";
+  #filter = "all";
+  #sort = "name-asc";
+  #taskFilter = "all";
+  #groupState = new Map();
+  #scrollRestore = new Map();
+  #focusRestore = null;
+  #batch = null;
+  #batchSeq = 0;
+  #viewSeq = 0;
+  #failures = 0;
+  #nextProbe = 0;
 
   get context() {
     return this.#context;
@@ -1388,23 +1567,34 @@ class OpenspecPanelElement extends HTMLElement {
     // Un altro workspace (anche con una change omonima) non eredita selezione,
     // dettaglio o documento: si riparte dall'elenco.
     if (!sameWorkspace) {
+      releaseWorkspace(prev, this);
+      if (value && this.isConnected) runtimeFor(value).owners.add(this);
+      this.#mode = value?.navigation?.query?.[NAV_VIEW] === "archive" ? "archive" : "active";
+      this.#search = String(value?.navigation?.query?.[NAV_SEARCH] || "").slice(0, 200);
+      this.#filter = CHANGE_FILTERS.includes(value?.navigation?.query?.[NAV_FILTER]) ? value.navigation.query[NAV_FILTER] : "all";
+      this.#sort = CHANGE_SORTS.includes(value?.navigation?.query?.[NAV_SORT]) ? value.navigation.query[NAV_SORT] : "name-asc";
+      this.#taskFilter = ["all", "pending", "done"].includes(value?.navigation?.query?.[NAV_TASKS]) ? value.navigation.query[NAV_TASKS] : "all";
+      this.#groupState.clear();
+      this.#failures = 0;
+      this.#nextProbe = 0;
       this._resetSelection();
       // Il pannello resta montato quando l'host cambia workspace: senza questo
       // azzeramento l'elenco (e il badge) del workspace precedente resterebbero
       // a schermo finche' la nuova lettura non risponde, cioe' anche per sempre
       // se quella richiesta non torna.
       this._clearRenderedState();
-    } else if (prev !== value && this.#pending) {
-      // L\x27host puo\x27 sostituire il context anche senza cambiare workspace.
-      // Un reload avviato col vecchio oggetto verra\x27 scartato: sblocca la UI.
-      this.#reloadSeq++;
-      this.#pending = false;
-      if (this.#nodes !== null) this._setBusy(false);
     }
     this._refresh();
   }
 
   _resetSelection() {
+    this._cancelBatch();
+    this.#batch = null;
+    this.#scrollRestore.clear();
+    this.#focusRestore = null;
+    this.#failures = 0;
+    this.#nextProbe = 0;
+    this.#viewSeq++;
     this.#reloadSeq++;
     this.#validitySeq++;
     this.#probeSeq++;     // le sonde del workspace precedente non contano piu'
@@ -1443,11 +1633,17 @@ class OpenspecPanelElement extends HTMLElement {
   connectedCallback() {
     this._buildSkeleton();
     mountedElements.add(this);
+    if (this.#context) runtimeFor(this.#context).owners.add(this);
     this._refresh();
     this._startTimer();
   }
 
   disconnectedCallback() {
+    this._cancelBatch();
+    this.#batch = null;
+    this.#scrollRestore.clear();
+    this.#focusRestore = null;
+    releaseWorkspace(this.#context, this);
     this.#generation++;
     this.#reloadSeq++;
     this.#validitySeq++;
@@ -1463,7 +1659,7 @@ class OpenspecPanelElement extends HTMLElement {
   _startTimer() {
     if (this.#timer !== null) return;
     if (typeof setInterval !== "function") return;
-    this.#timer = setInterval(() => { void this._checkExternalChanges(); }, EXTERNAL_CHECK_MS);
+    this.#timer = setInterval(() => { if (Date.now() >= this.#nextProbe) void this._checkExternalChanges(); }, EXTERNAL_CHECK_MS);
     // In Node (test) un timer attivo terrebbe vivo il processo: non deve.
     if (typeof this.#timer?.unref === "function") this.#timer.unref();
   }
@@ -1484,14 +1680,20 @@ class OpenspecPanelElement extends HTMLElement {
   // se non e' cambiata non succede nulla (nessun render, nessuna richiesta di
   // contenuto). Le modifiche esterne cambiano almeno una dimensione o un mtime.
   async _checkExternalChanges() {
-    if (!this.isConnected || this.#probing || this.#pending) return;
+    if (!this.isConnected || this.#probing || this.#pending || this.#mode === "archive") return;
     if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
     const ctx = this.#context;
     if (ctx === null || ctx.files === undefined) return;
     this.#probing = true;
     const seq = ++this.#probeSeq;
     try {
-      const fingerprint = await this._probe(ctx);
+      const key = openSpecKey(ctx);
+      let flight = probeFlights.get(key);
+      if (!flight) {
+        flight = this._probe(ctx).finally(() => { if (probeFlights.get(key) === flight) probeFlights.delete(key); });
+        probeFlights.set(key, flight);
+      }
+      const fingerprint = await flight;
       // Una sonda piu' recente (tipicamente partita dopo un refresh) descrive
       // dati piu' freschi: il suo risultato non va sovrascritto da questa.
       if (seq !== this.#probeSeq) return;
@@ -1499,10 +1701,16 @@ class OpenspecPanelElement extends HTMLElement {
         // L'avviso riguarda i dati mostrati: se non c'e' ancora nulla a schermo
         // (primo load o cambio workspace) non c'e' niente da segnalare come
         // potenzialmente vecchio.
-        if (this.isConnected && this.#state !== null && sameWorkspaceContext(ctx, this.#context)) this._markProbeFailed();
+        if (this.isConnected && this.#state !== null && sameWorkspaceContext(ctx, this.#context)) {
+          this.#failures++;
+          this.#nextProbe = Date.now() + Math.min(4, this.#failures) * EXTERNAL_CHECK_MS;
+          this._markProbeFailed();
+        }
         return;
       }
-      if (ctx !== this.#context || !this.isConnected) return;
+      if (!sameWorkspaceContext(ctx, this.#context) || !this.isConnected) return;
+      this.#failures = 0;
+      this.#nextProbe = 0;
       if (this.#probeFailed) {
         this.#probeFailed = false;
         this._reload(ctx, { silent: true });
@@ -1565,6 +1773,13 @@ class OpenspecPanelElement extends HTMLElement {
     errorBox.hidden = true;
     body.textContent = "";
     body.append(this._text("p os-muted", "Loading OpenSpec…"));
+    this.#nodes.mode.value = this.#mode;
+    this.#nodes.search.value = this.#search;
+    this.#nodes.filter.value = this.#filter;
+    this.#nodes.sort.value = this.#sort;
+    this.#nodes.check.disabled = true;
+    this.#nodes.summary.textContent = "";
+    this.#nodes.diagnostics.textContent = "";
     this._renderStamp(null);
   }
 
@@ -1576,9 +1791,10 @@ class OpenspecPanelElement extends HTMLElement {
   // distinguibile da "err" (lettura fallita), "trunc" (elenco incompleto) e
   // assenza di entry.
   async _probe(ctx) {
+    const files = workspaceFiles(readContext(ctx));
     try {
       const read = async path => {
-        const res = await safeList(ctx.files, path);
+        const res = await safeList(files, path);
         if (res.error) return { entries: [], marker: "err" };
         return { entries: res.entries, marker: res.truncated === true ? "trunc" : "" };
       };
@@ -1588,7 +1804,7 @@ class OpenspecPanelElement extends HTMLElement {
         .join(",");
       const dirish = list => (list || []).filter(e => e.type === "directory" || e.type === "symlink");
 
-      const top = await safeList(ctx.files, CHANGES_DIR);
+      const top = await safeList(files, CHANGES_DIR);
       if (top.error) throw top.error; // senza l'elenco non c'e' impronta
       const topDirs = dirish(top.entries);
       const names = topDirs.filter(e => e.name !== ARCHIVE_DIR).map(e => e.name).sort().slice(0, INDEX_MAX_CHANGES);
@@ -1598,25 +1814,27 @@ class OpenspecPanelElement extends HTMLElement {
       // sondare l'archivio e' una richiesta in piu' senza effetto visibile (e una
       // superficie d'errore in piu'). Le modifiche all'archivio restano coperte
       // dall'elenco delle change quando ne compaiono o spariscono di attive.
-      if (this.#state !== null && this.#state.kind === "no-active" && topDirs.some(e => e.name === ARCHIVE_DIR)) {
+      if (names.length === 0 && topDirs.some(e => e.name === ARCHIVE_DIR)) {
         const archived = await read(`${CHANGES_DIR}/${ARCHIVE_DIR}/`);
         parts.push(`archive|${archived.marker}|${dirish(archived.entries).map(e => e.name).sort().join(",")}`);
       }
 
-      for (const name of names) {
+      const branches = await mapLimited(names, REQUEST_LIMITS.concurrency, async name => {
+        const parts = [];
         const base = `${CHANGES_DIR}/${name}`;
         const listing = await read(`${base}/`);
         parts.push(`${name}|${listing.marker}|${signature(listing.entries)}`);
-        if (!dirish(listing.entries).some(e => e.name === "specs")) continue;
+        if (!dirish(listing.entries).some(e => e.name === "specs")) return parts.join(";");
         const caps = await read(`${base}/specs/`);
-        const capDirs = dirish(caps.entries);
+        const capDirs = dirish(caps.entries).sort((a, b) => compareName(a.name, b.name));
         parts.push(`caps|${caps.marker}|${capDirs.length}|${capDirs.slice(0, MAX_SPEC_FILES).map(e => e.name).sort().join(",")}`);
-        for (const cap of capDirs.slice(0, MAX_SPEC_FILES)) {
+        const innerParts = await mapLimited(capDirs.sort((a, b) => compareName(a.name, b.name)).slice(0, MAX_SPEC_FILES), REQUEST_LIMITS.concurrency, async cap => {
           const inner = await read(`${base}/specs/${cap.name}/`);
-          parts.push(`  ${cap.name}|${inner.marker}|${signature(inner.entries)}`);
-        }
-      }
-      return parts.join(";");
+          return `  ${cap.name}|${inner.marker}|${signature(inner.entries)}`;
+        });
+        return [...parts, ...innerParts].join(";");
+      });
+      return [...parts, ...branches].join(";");
     } catch {
       return null;
     }
@@ -1627,6 +1845,7 @@ class OpenspecPanelElement extends HTMLElement {
   // assorbita. L'ordine conta: un'impronta calcolata prima di una sonda piu'
   // recente viene scartata invece di sovrascriverla.
   _refreshFingerprint(ctx) {
+    if (this.#mode === "archive") return;
     const seq = ++this.#probeSeq;
     this._probe(ctx)
       .then(fp => {
@@ -1669,8 +1888,191 @@ class OpenspecPanelElement extends HTMLElement {
     errorBox.id = "openspec-error";
     errorBox.hidden = true;
 
-    root.append(head, body, errorBox);
-    this.#nodes = { body, errorBox, badge, stamp, refresh };
+    const controls = this._el("div", "os-controls");
+    const mode = this._select("openspec-view", "Change collection", [["active", "Active changes"], ["archive", "Archive (on demand)"]], this.#mode, value => this._switchMode(value));
+    const search = this._el("input");
+    search.id = "openspec-search";
+    search.type = "search";
+    search.maxLength = 200;
+    search.setAttribute("aria-label", "Search loaded change names");
+    search.placeholder = "Search loaded names";
+    search.addEventListener("input", () => { this.#search = search.value.slice(0, 200); this._persistView(); this._renderState(this.#state); });
+    const filter = this._select("openspec-filter", "Task status filter", [["all", "All task states"], ["not-started", "Not started (incl. zero tasks)"], ["in-progress", "In progress"], ["completed", "Tasks completed"], ["unknown", "Task count unknown"], ["artifacts", "Missing / unknown artifacts"]], this.#filter, value => { this.#filter = value; this._persistView(); this._renderState(this.#state); });
+    const sort = this._select("openspec-sort", "Sort loaded changes", [["name-asc", "Name A–Z"], ["name-desc", "Name Z–A"], ["progress-asc", "Progress ↑ (unknown last)"], ["progress-desc", "Progress ↓ (unknown last)"], ["open-tasks", "Open tasks ↑ (unknown last)"]], this.#sort, value => { this.#sort = value; this._persistView(); this._renderState(this.#state); });
+    const check = this._el("button");
+    check.id = "openspec-check";
+    check.type = "button";
+    check.textContent = "Check all loaded changes";
+    check.addEventListener("click", () => { void this._startBatch().catch(() => this._cancelBatch()); });
+    controls.append(mode, search, filter, sort, check);
+    const summary = this._el("p", "os-summary");
+    const diagnostics = this._el("div", "os-diagnostics");
+    diagnostics.setAttribute("role", "status");
+    root.append(head, controls, summary, diagnostics, body, errorBox);
+    this.#nodes = { body, errorBox, badge, stamp, refresh, controls, mode, search, filter, sort, summary, diagnostics, check };
+  }
+
+  _select(id, label, options, value, change) {
+    const select = this._el("select");
+    select.id = id;
+    select.setAttribute("aria-label", label);
+    for (const [key, text] of options) {
+      const option = this._el("option");
+      option.value = key;
+      option.textContent = text;
+      select.append(option);
+    }
+    select.value = value;
+    select.addEventListener("change", () => change(select.value));
+    return select;
+  }
+
+  _relativeName(name) { return this.#mode === "archive" ? `${ARCHIVE_DIR}/${name}` : name; }
+
+  _persistView() {
+    try {
+      const nav = this._nav();
+      if (!nav) return;
+      for (const [key, value] of [[NAV_VIEW, this.#mode], [NAV_SEARCH, this.#search], [NAV_FILTER, this.#filter], [NAV_SORT, this.#sort], [NAV_TASKS, this.#taskFilter]]) nav.set(key, value || undefined, { replace: true });
+    } catch { /* optional navigation */ }
+  }
+
+  _switchMode(mode) {
+    if (!["active", "archive"].includes(mode) || this.#mode === mode) return;
+    this.#mode = mode;
+    this._resetSelection();
+    this.#batch = null;
+    this._persistSelection();
+    this._persistView();
+    this._clearRenderedState();
+    this._refresh();
+  }
+
+  _renderControls() {
+    if (!this.#nodes) return;
+    const n = this.#nodes;
+    n.mode.value = this.#mode;
+    if (n.search.value !== this.#search) n.search.value = this.#search;
+    n.filter.value = this.#filter;
+    n.sort.value = this.#sort;
+    const state = this.#state;
+    const s = workspaceSummary(state?.changes || []);
+    n.summary.textContent = `${s.loaded} loaded ${this.#mode === "archive" ? "archived" : "active"} · ${s.completed} task-complete · ${s.inProgress} in progress · ${s.openTasks} known open tasks · ${s.unknown} unknown counts.`
+      + (state?.truncated ? " Partial listings: search, filters and totals cover loaded data only (max 40)." : " Loaded data only; task completion is not structural conformity.");
+    n.check.disabled = !s.loaded || this.#batch?.running === true;
+    this._renderBatch();
+  }
+
+  _preserveUI(update) {
+    const root = this.#shadow;
+    if (!root) { update(); return; }
+    const active = root.activeElement;
+    const pendingFocus = !active && this.#focusRestore && this.#focusRestore.external === document.activeElement && Date.now() - this.#focusRestore.at < 5000 ? this.#focusRestore : null;
+    const focusKey = active?.dataset?.focusKey || pendingFocus?.key;
+    const focusId = active?.id || pendingFocus?.id;
+    const selection = typeof active?.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : pendingFocus?.selection;
+    const open = new Map([...root.querySelectorAll("details")].map((el, i) => [el.dataset.stateKey || `details:${i}`, el.open]));
+    const scrolls = [];
+    let ancestor = this;
+    const visited = new Set();
+    while (ancestor && !visited.has(ancestor)) {
+      visited.add(ancestor);
+      if (typeof ancestor.scrollTop === "number") {
+        const pending = this.#scrollRestore.get(ancestor);
+        // Retain intended scroll through temporary loading placeholders, but
+        // never override a user scroll performed between asynchronous renders.
+        const keep = pending && Date.now() - pending.at < 5000 && ancestor.scrollTop === pending.applied;
+        scrolls.push([ancestor, keep ? pending.top : ancestor.scrollTop, keep ? pending.left : ancestor.scrollLeft]);
+      }
+      ancestor = ancestor.parentElement || ancestor.getRootNode?.()?.host;
+    }
+    update();
+    for (const [i, el] of [...root.querySelectorAll("details")].entries()) {
+      const key = el.dataset.stateKey || `details:${i}`;
+      if (open.has(key)) el.open = open.get(key);
+    }
+    if (active || pendingFocus) {
+      const replacement = focusId ? root.querySelector(`#${focusId}`) || (focusId === "openspec-stop" ? root.querySelector("#openspec-check") : null)
+        : focusKey ? [...root.querySelectorAll("button, input, select, summary")].find(el => el.dataset.focusKey === focusKey) : null;
+      if (replacement) {
+        this.#focusRestore = null;
+        if (replacement !== root.activeElement) {
+          replacement.focus({ preventScroll: true });
+          if (selection && typeof replacement.setSelectionRange === "function") replacement.setSelectionRange(...selection);
+        }
+      } else if (focusKey || focusId) this.#focusRestore = { key: focusKey, id: focusId, selection, external: document.activeElement, at: Date.now() };
+    }
+    for (const [node, top, left] of scrolls) {
+      node.scrollTop = top; node.scrollLeft = left;
+      if (node.scrollTop !== top) this.#scrollRestore.set(node, { top, left, applied: node.scrollTop, at: Date.now() });
+      else this.#scrollRestore.delete(node);
+    }
+  }
+
+  _cancelBatch() {
+    this.#batchSeq++;
+    if (this.#batch) { this.#batch.running = false; this.#batch.cancelled = true; }
+  }
+
+  async _startBatch() {
+    if (this.#batch?.running || !this.#state?.changes?.length) return;
+    const ctx = readContext(this.#context);
+    const mode = this.#mode;
+    const seq = ++this.#batchSeq;
+    const batch = this.#batch = { running: true, cancelled: false, total: this.#state.changes.length, results: [] };
+    this._renderControls();
+    try {
+      await mapLimited(this.#state.changes, REQUEST_LIMITS.batchConcurrency, async ch => {
+        if (seq !== this.#batchSeq) return;
+        const name = mode === "archive" ? `${ARCHIVE_DIR}/${ch.name}` : ch.name;
+        let result;
+        try {
+          const detail = await loadChangeDetail(ctx, name);
+          if (seq !== this.#batchSeq) return;
+          result = detail.state === "ready" ? await loadValidation(ctx, name, detail, { shouldContinue: () => seq === this.#batchSeq })
+            : { state: "unverified", reasons: [detail.error], checked: false };
+        } catch (error) { result = { state: "unverified", reasons: [errMessage(error)], checked: false }; }
+        if (seq !== this.#batchSeq || !sameWorkspaceContext(ctx, this.#context)) return;
+        batch.results.push({ name: ch.name, ...result });
+        this._preserveUI(() => this._renderBatch());
+      });
+    } catch (error) {
+      if (seq === this.#batchSeq) { batch.error = errMessage(error); this._cancelBatch(); }
+    } finally {
+      if (this.#batch === batch && sameWorkspaceContext(ctx, this.#context)) {
+        batch.running = false;
+        // Never let a UI failure become an unhandled asynchronous rejection.
+        try { this._preserveUI(() => this._renderControls()); } catch { /* host teardown */ }
+      }
+    }
+  }
+
+  _renderBatch() {
+    if (!this.#nodes) return;
+    const node = this.#nodes.diagnostics;
+    node.textContent = "";
+    const b = this.#batch;
+    if (!b) return;
+    const counts = { valid: 0, incomplete: 0, unverified: 0, invalid: 0 };
+    for (const result of b.results) counts[result.state]++;
+    node.append(this._text("p", `Local structural checks ${b.results.length}/${b.total}${b.cancelled ? " (stopped)" : ""}: ${counts.valid} pass · ${counts.incomplete} incomplete · ${counts.unverified} unverified · ${counts.invalid} structural errors. Not full CLI validation.`));
+    if (b.error) node.append(this._text("p error", `Checks interrupted: ${b.error}`));
+    if (b.running) {
+      const stop = this._el("button"); stop.type = "button"; stop.id = "openspec-stop";
+      stop.textContent = "Stop checks";
+      stop.addEventListener("click", () => { this._cancelBatch(); this._preserveUI(() => this._renderControls()); });
+      node.append(stop);
+    }
+    const list = this._el("ul");
+    for (const result of [...b.results].sort((a, b) => compareName(a.name, b.name))) {
+      const li = this._el("li"), button = this._el("button");
+      button.type = "button"; button.dataset.focusKey = `diagnostic:${result.name}`;
+      button.textContent = `${result.name}: ${result.state === "valid" ? "structure ok" : result.state}`;
+      button.title = [...(result.reasons || []), ...(result.warnings || [])].join(" · ");
+      button.addEventListener("click", () => this._openChange(result.name));
+      li.append(button); list.append(li);
+    }
+    node.append(list);
   }
 
   _el(tag, className) {
@@ -1684,19 +2086,36 @@ class OpenspecPanelElement extends HTMLElement {
     if (ctx === null || ctx.files === undefined) return;
     this._buildSkeleton();
     const generation = this.#generation;
-    loadOpenSpecState(ctx)
+    const viewSeq = this.#viewSeq;
+    loadOpenSpecState(ctx, { archive: this.#mode === "archive" })
       .then(res => {
         if (!this.isConnected || this.#generation !== generation) return;
-        if (ctx !== this.#context) return; // cambio workspace durante il load
+        if (!sameWorkspaceContext(ctx, this.#context) || viewSeq !== this.#viewSeq) return;
         // L'host reimposta .context a ogni suo render: se lo stato e' lo stesso
         // oggetto (cache hit) non si ricostruisce il DOM.
         if (res.state !== this.#state) {
+          const reloadDetail = this.#state !== null && !this.#pending && this.#selected !== null;
+          if (this.#state !== null && !this.#pending) {
+            // A TTL-driven index refresh must not label an old open document
+            // or diagnostic result as freshly read. Keep only the new index.
+            clearWorkspaceCaches(openSpecKey(ctx), { index: false });
+            this._cancelBatch();
+            this.#batch = null;
+            this.#validitySeq++;
+            this.#detailSeq++;
+            this.#docSeq++;
+            this.#validity = null;
+            this.#detail = null;
+            this.#doc = null;
+            this.#detailStatus = this.#selected === null ? "idle" : "loading";
+          }
           this._renderState(res.state);
           this._refreshFingerprint(ctx);
+          if (reloadDetail && this.#selected !== null) this._openChange(this.#selected, { keepTab: true });
         }
       })
       .catch(err => {
-        if (!this.isConnected || this.#generation !== generation) return;
+        if (!this.isConnected || this.#generation !== generation || viewSeq !== this.#viewSeq || !sameWorkspaceContext(ctx, this.#context)) return;
         this._renderState({
           kind: "error", changes: [], errors: [], error: `Render error: ${errMessage(err)}`,
           truncated: false, archiveCount: null, scannedAt: new Date().toISOString()
@@ -1741,13 +2160,18 @@ class OpenspecPanelElement extends HTMLElement {
 
   _reload(ctx, { silent }) {
     const reloadSeq = ++this.#reloadSeq;
-    clearWorkspaceCaches(openSpecKey(ctx));
+    const key = openSpecKey(ctx) + (this.#mode === "archive" ? "|archive" : "");
+    const shared = cache.get(key);
+    if (!(shared?.inFlight && Date.now() - shared.forcedAt < FORCE_MIN_INTERVAL_MS)) clearWorkspaceCaches(openSpecKey(ctx));
+    this._cancelBatch();
+    this.#batch = null;
+    this.#nextProbe = 0;
     this.#pending = true;
     if (!silent) this._setBusy(true);
     const generation = this.#generation;
-    loadOpenSpecState(ctx, { force: true })
+    loadOpenSpecState(ctx, { force: true, archive: this.#mode === "archive" })
       .then(res => {
-        if (!this.isConnected || this.#generation !== generation || reloadSeq !== this.#reloadSeq || ctx !== this.#context) return;
+        if (!this.isConnected || this.#generation !== generation || reloadSeq !== this.#reloadSeq || !sameWorkspaceContext(ctx, this.#context)) return;
         this.#pending = false;
         // Dati appena riletti: "potrebbe essere vecchio" non e' piu' vero e il
         // flag non deve forzare un altro reload completo alla prossima sonda
@@ -1767,7 +2191,7 @@ class OpenspecPanelElement extends HTMLElement {
         if (this.#selected !== null) this._openChange(this.#selected, { keepTab: true });
       })
       .catch(err => {
-        if (!this.isConnected || this.#generation !== generation || reloadSeq !== this.#reloadSeq || ctx !== this.#context) return;
+        if (!this.isConnected || this.#generation !== generation || reloadSeq !== this.#reloadSeq || !sameWorkspaceContext(ctx, this.#context)) return;
         this.#pending = false;
         this._setBusy(false);
         this._renderState({
@@ -1785,8 +2209,14 @@ class OpenspecPanelElement extends HTMLElement {
   }
 
   _renderState(state) {
+    if (!state) return;
+    this._preserveUI(() => this._drawState(state));
+  }
+
+  _drawState(state) {
     this.#state = state;
     if (this.#nodes === null) this._buildSkeleton();
+    this._renderControls();
     const { body, errorBox, badge } = this.#nodes;
 
     const changes = state.kind === "ready" && Array.isArray(state.changes) ? state.changes : [];
@@ -1794,7 +2224,7 @@ class OpenspecPanelElement extends HTMLElement {
 
     if (n > 0) {
       badge.textContent = String(n);
-      badge.title = n === 1 ? "1 active change" : `${n} active changes`;
+      badge.title = `${n} loaded ${this.#mode} change${n === 1 ? "" : "s"}`;
       badge.hidden = false;
     } else {
       badge.textContent = "";
@@ -1833,6 +2263,7 @@ class OpenspecPanelElement extends HTMLElement {
       return;
     }
     if (state.kind === "no-active") {
+      if (this.#mode === "archive") { body.append(this._text("p empty", state.truncated ? "No archived changes in the readable listing (partial)." : "No archived changes.")); return; }
       let txt = state.truncated ? "No active changes in the readable listing." : "No active changes.";
       if (state.archiveCount !== null && state.archiveCount !== undefined) txt += ` (${state.archiveCount} archived)`;
       body.append(this._text("p empty", txt));
@@ -1843,18 +2274,19 @@ class OpenspecPanelElement extends HTMLElement {
       return;
     }
     if (changes.length === 0) {
-      body.append(this._text("p empty", "No active changes."));
+      body.append(this._text("p empty", this.#mode === "archive" ? "No archived changes." : "No active changes."));
       return;
     }
 
-    body.append(this._changeListNode(changes, n > 1));
+    const visible = selectChanges(changes, { search: this.#search, filter: this.#filter, sort: this.#sort });
+    body.append(this._changeListNode(visible, n > 1));
     // Al primo render (o dopo un ritorno da un altro tool) l'host puo' aver
     // conservato la selezione nella query del pannello: la si ripristina.
     if (this.#selected === null && this.#restored === false) {
       this.#restored = true;
       if (this._restoreSelection(changes)) {
         body.textContent = "";
-        body.append(this._changeListNode(changes, n > 1), this._detailNode());
+        body.append(this._changeListNode(visible, n > 1), this._detailNode());
         this._openChange(this.#selected, { keepTab: true });
         return;
       }
@@ -1876,9 +2308,10 @@ class OpenspecPanelElement extends HTMLElement {
     list.setAttribute("role", "list");
     if (expanded) {
       const section = this._el("h2", "os-section");
-      section.textContent = "Active changes";
+      section.textContent = this.#mode === "archive" ? "Archived changes" : "Active changes";
       list.append(section);
     }
+    if (changes.length === 0) list.append(this._text("p os-empty", "No matching changes in the loaded data."));
     for (const ch of changes) list.append(this._changeCard(ch, changes.length === 1));
     return list;
   }
@@ -1890,6 +2323,7 @@ class OpenspecPanelElement extends HTMLElement {
 
     const toggle = this._el("button", "os-change-toggle");
     toggle.type = "button";
+    toggle.dataset.focusKey = `change:${ch.name}`;
     toggle.setAttribute("aria-expanded", selected ? "true" : "false");
     toggle.setAttribute("aria-controls", "openspec-detail");
     toggle.title = `Show documents of ${ch.name}`;
@@ -2044,7 +2478,7 @@ class OpenspecPanelElement extends HTMLElement {
     const generation = this.#generation;
     const seq = ++this.#detailSeq;
     this.#docSeq++; // il documento aperto appartiene alla selezione precedente
-    loadChangeDetail(ctx, name)
+    loadChangeDetail(ctx, this._relativeName(name))
       .then(detail => {
         if (!this.isConnected || this.#generation !== generation) return;
         if (seq !== this.#detailSeq) return; // superata da una selezione/refresh piu' recente
@@ -2071,7 +2505,7 @@ class OpenspecPanelElement extends HTMLElement {
   _loadValidity(ctx, name, detail) {
     if (detail.state !== "ready") return;
     const seq = ++this.#validitySeq;
-    loadValidation(ctx, name, detail)
+    loadValidation(ctx, this._relativeName(name), detail)
       .then(result => {
         if (!this.isConnected || seq !== this.#validitySeq || !sameWorkspaceContext(ctx, this.#context) || this.#selected !== name || this.#detail !== detail) return;
         this.#validity = result;
@@ -2095,9 +2529,10 @@ class OpenspecPanelElement extends HTMLElement {
   }
 
   _renderDetailOnly() {
-    const body = this.#nodes.body;
-    const current = body.querySelector("#openspec-detail");
-    if (current !== null) current.replaceWith(this._detailNode());
+    this._preserveUI(() => {
+      const current = this.#nodes.body.querySelector("#openspec-detail");
+      if (current !== null) current.replaceWith(this._detailNode());
+    });
   }
 
   _docPathFor(tabKey) {
@@ -2137,7 +2572,7 @@ class OpenspecPanelElement extends HTMLElement {
     // Gli avvisi non cambiano il verdetto ma non vanno nascosti: sono le
     // differenze "non bloccanti" del CLI (req. fuori da una sezione delta, testo
     // molto lungo) e senza questa riga sparirebbero senza traccia.
-    if (this.#validity !== null && this.#validity.checked === true) {
+    if (this.#validity !== null) {
       const reasons = Array.isArray(this.#validity.reasons) ? this.#validity.reasons : [];
       const warnings = Array.isArray(this.#validity.warnings) ? this.#validity.warnings : [];
       const notes = [...reasons, ...warnings.map(w => `warning: ${w}`)];
@@ -2145,6 +2580,7 @@ class OpenspecPanelElement extends HTMLElement {
         const box = this._el("div", "os-validity-box");
         box.append(this._validityBadge(this.#validity.state));
         const details = this._el("details", "os-validity-details");
+        details.dataset.stateKey = `validity:${this.#mode}:${this.#selected}`;
         const summary = this._el("summary");
         summary.textContent = reasons.length > 0
           ? `${reasons.length} reason${reasons.length === 1 ? "" : "s"}${warnings.length > 0 ? `, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}` : ""}`
@@ -2316,9 +2752,11 @@ class OpenspecPanelElement extends HTMLElement {
   _renderTabPanelContent() {
     const panel = this.#nodes.body.querySelector("#openspec-tabpanel");
     if (panel === null) return;
-    panel.removeAttribute("aria-busy");
-    panel.textContent = "";
-    this._fillTabPanel(panel);
+    this._preserveUI(() => {
+      panel.removeAttribute("aria-busy");
+      panel.textContent = "";
+      this._fillTabPanel(panel);
+    });
   }
 
   _fillTabPanel(panel) {
@@ -2449,6 +2887,7 @@ class OpenspecPanelElement extends HTMLElement {
     specs.files.forEach((file, index) => {
       const button = this._el("button", index === this.#specIndex ? "os-spec os-spec--on" : "os-spec");
       button.type = "button";
+      button.dataset.focusKey = `spec:${file.path}`;
       button.textContent = `${file.capability}/${file.name}`;
       button.setAttribute("aria-current", index === this.#specIndex ? "true" : "false");
       button.addEventListener("click", () => {
@@ -2529,21 +2968,41 @@ class OpenspecPanelElement extends HTMLElement {
     panel.append(head);
     panel.append(this._progressNode({ known: true, completed: summary.completed, total: summary.total }));
 
+    const filters = this._el("div", "os-task-filters");
+    for (const [key, label] of [["all", "All tasks"], ["pending", "To complete"], ["done", "Completed tasks"]]) {
+      const button = this._el("button");
+      button.type = "button";
+      button.dataset.focusKey = `tasks:${key}`;
+      button.textContent = label;
+      button.setAttribute("aria-pressed", String(this.#taskFilter === key));
+      button.addEventListener("click", () => { this.#taskFilter = key; this._persistView(); this._renderTabPanelContent(); });
+      filters.append(button);
+    }
+    panel.append(filters);
     const list = this._el("div", "os-task-groups");
-    for (const group of summary.groups) {
-      const section = this._el("section", "os-task-group");
-      const h = this._el("h3", "os-task-group-head");
+    const compatible = new Set();
+    for (const [index, group] of summary.groups.entries()) {
+      // Completion changes preserve expansion; renamed/reordered task text resets it.
+      const key = JSON.stringify([this.#mode, this.#selected, index, group.name, group.items.map(it => it.text)]);
+      compatible.add(key);
+      const section = this._el("details", "os-task-group");
+      section.dataset.stateKey = key;
+      section.open = this.#groupState.get(key) ?? true;
+      section.addEventListener("toggle", () => this.#groupState.set(key, section.open));
+      const h = this._el("summary", "os-task-group-head");
+      h.dataset.focusKey = `group:${key}`;
       const gname = this._el("span");
       gname.textContent = group.name;
       const gcount = this._el("span", "os-tab-count");
       gcount.textContent = `${group.completed}/${group.total}`;
       h.append(gname, gcount);
       section.append(h);
-      if (group.items.length === 0) {
-        section.append(this._text("p os-muted", "No tasks in this section."));
+      const items = group.items.filter(it => this.#taskFilter === "all" || it.done === (this.#taskFilter === "done"));
+      if (items.length === 0) {
+        section.append(this._text("p os-muted", group.items.length === 0 ? "No tasks in this section." : "No matching tasks in this section."));
       } else {
         const ul = this._el("ul", "os-task-list");
-        for (const item of group.items) {
+        for (const item of items) {
           const li = this._el("li", item.done ? "os-task os-task--done" : "os-task");
           const box = this._el("span", "os-check");
           box.setAttribute("aria-hidden", "true");
@@ -2557,6 +3016,11 @@ class OpenspecPanelElement extends HTMLElement {
         section.append(ul);
       }
       list.append(section);
+    }
+    // Drop incompatible states for this change only, keeping other viewed changes.
+    for (const key of this.#groupState.keys()) {
+      const [mode, name] = JSON.parse(key);
+      if (mode === this.#mode && name === this.#selected && !compatible.has(key)) this.#groupState.delete(key);
     }
     panel.append(list);
     panel.append(this._docActions(path));

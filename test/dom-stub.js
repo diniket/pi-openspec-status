@@ -50,7 +50,14 @@ export function createDomStub() {
       return ev;
     }
 
-    focus() { this._focused = true; }
+    focus() {
+      this._focused = true;
+      let root = this;
+      while (root.parent) root = root.parent;
+      root.activeElement = this;
+    }
+
+    setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
 
     replaceWith(node) {
       const p = this.parent;
@@ -137,6 +144,7 @@ export function createDomStub() {
     }
 
     querySelector(sel) {
+      if (sel.includes(",")) return this.querySelectorAll(sel)[0] ?? null;
       const steps = sel.trim().split(/\s+/);
       const out = [];
       const walk = (n) => {
@@ -150,6 +158,7 @@ export function createDomStub() {
     }
 
     querySelectorAll(sel) {
+      if (sel.includes(",")) return this._descendants().filter(node => sel.split(",").some(s => this._matchesChain(node, s.trim().split(/\s+/))));
       const steps = sel.trim().split(/\s+/);
       const out = [];
       const walk = (n) => {
