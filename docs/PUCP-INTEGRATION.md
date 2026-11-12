@@ -1,43 +1,45 @@
-# PUCP integration and rollback
+# PUCP integration and rollback — deployed v0.2.0
 
-Prepared in the separate PUCP worktree
-`/home/marco/Progetti/pi-unified-control-plane-openspec`, branch
-`feature/openspec-plugin-release`; the main PUCP checkout is untouched.
+After explicit user GO, the preparation branch was fast-forwarded into canonical PUCP main at
+`/home/marco/Progetti/pi-unified-control-plane`. Onlypi-hub is enabled for openspec-status-web.
+Sourcev0.2.0 isb7d92d7b0fcdf281a7398f97ac93f83eaf43419a; package/module/source hashes and
+npm integrity are pinned in configs/openspec-status-web/PROVENANCE.json. Four-file tarballs are
+retained with matching extracted payloads. No node_modules, sessions, credentials or temp data.
 
-The inactive `openspec-status-web` release bundle uses the **existing** release engine:
-per-host flock, composed-payload/spec hashes, immutable release directories, atomic `current`,
-manifest/integrity checks, ownership rules, automatic failed-apply rollback and explicit rollback.
-No parallel deployment system was created. Only this plugin's destination is declared; unrelated
-plugins remain unmanaged. Inventory has `hosts: []` to prevent any production application.
+Existing PUCP engine owns per-host flock, composed-payload/spec hashes, immutable directories,
+atomic current, manifest/integrity checking, foreign-link refusal, automatic failed-apply rollback
+and explicit rollback. No parallel installer, service, transport or link switcher was introduced.
 
-Payloads contain only npm's allowlisted LICENSE, README, package.json and dist module; provenance
-pins source commit, package SHA-256/npm integrity and module SHA-256. Active609c6bb baseline
-rollback was packaged independently from Git, not copied from an unverified working directory.
-Candidate remains a pre-release 0.1.0 package; replace it with the approved v0.2.0 artifact later.
+## Actual deployment
 
-Offline proof executes the actual PUCP engine with actual module bytes in a fake HOME:
-baseline apply -> candidate apply -> check -> baseline rollback; unrelated-plugin preservation;
-refusal of a foreign development link. Existing engine suite also runs offline. See
-`tests/test_openspec_release.py` and `docs/openspec-plugin-release.md` in the PUCP worktree.
+- Baseline609c6bb first adopted with the explicitly approved PUCP ownership-transfer force option,
+  after check/dry-run:1794517603-34c3305d18-7870ab4274dc.
+- Verifiedv0.2.0 normal apply:1794517701-4feb742f6e-d3c5e033d9fc.
+- Actual production rollback verified both filesystem and HTTP original module hash.
+- Normal reapply final release: **1794517730-4feb742f6e-d3c5e033d9fc**, check ALLINEATO.
 
-## Approval boundary
+Production link points to ~/.pucp/bundles/openspec-status-web/current/package, not a development
+tree. Old checkout remains clean at609c6bb; unrelated plugins and web/daemon PIDs156/162 unchanged.
+No daemon restart needed. Reload browser to load the new revision.
 
-Production still follows `/home/marco/Progetti/pi-openspec-status-web` at609c6bb.
-Its current unmanaged link is **not adopted**. Baseline-first managed adoption and pi-hub host
-activation require explicit GO. Normal PUCP apply refuses the foreign link; a specifically
-approved ownership transfer may use PUCP's existing force mechanism, not manual link replacement.
-Establish and verify the baseline managed release before applying the feature release, then reload
-the browser. No session-daemon restart is needed for this browser-only package.
+```
+./bin/pucp rollback pi-hub --bundle openspec-status-web --to 1794517603-34c3305d18-7870ab4274dc
+```
 
-`pucp rollback pi-hub --bundle openspec-status-web --to <verified-baseline-release>` becomes usable
-only after that managed baseline exists. The release ID is determined then, not invented now.
+This rollback ID is real and tested; retain it. Original module SHA256:
+11ede8e7c1e565117f4a7764457ffab3747952ee060ed533dbf875926567607a.
+Currentv0.2.0 module SHA256:
+6857432a946e27c8487da97c6997d00614a20340b122148c2f7f4017068de226.
 
-Important: release bundles do not implement the delegated-M5 source anti-downgrade/expect-sha gates.
-Current preparation relies on pinned hashes, committed provenance, inactive inventory and explicit
-GO. Do not pretend those delegated flags enforce a browser-plugin release policy.
+Offline verification:2 dedicated tests+84 engine tests pass, including every archive/payload byte,
+inventory scope, apply/check/rollback and unrelated-plugin/foreign-link safety. Real postdeploy
+HTTP manifest/byte verification and Cristina GUI immutable-package smoke complement those tests.
+Release bundles do NOT implement the delegated-M5 anti-downgrade/expect-sha gates; do not claim
+unsupported enforcement. Committed pinned provenance and explicit user GO are the release gates.
 
-## Retention / cleanup
+## Publication and retention
 
-Preserve both development worktrees, all branches/PRs, package evidence, baseline/candidate payloads
-and release history until approved release and rollback review. Do not remove locks by hand.
-Review dirty/untracked data and references before any later cleanup; no cleanup is automatic here.
+Remote tag push is blocked by Guardian unsupported tag-ref policy; npm needs human authentication.
+These publication limits do not change deployed bytes/provenance. See RELEASE-EXECUTION.md.
+Keep branches, PRs, both worktrees, package evidence and all3 release directories. No automatic
+cleanup requested; inspect dirty/untracked data and references before any later cleanup.

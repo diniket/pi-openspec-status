@@ -1,30 +1,26 @@
-# Consolidation handoff
+# Release continuation handoff
 
-See [measured report](CONSOLIDATION.md), [review adjudication](SECOND-REVIEW.md),
-[release plan](RELEASE.md), [PUCP integration](PUCP-INTEGRATION.md).
+Current execution report: [RELEASE-EXECUTION.md](RELEASE-EXECUTION.md).
+Historical review evidence: CONSOLIDATION.md and SECOND-REVIEW.md.
 
-- Actual worktree: `/home/marco/Progetti/pi-openspec-workspace-experience`, feature branch.
-- Initial push34cd4fd succeeded via plain Guardian-protected push from this actual cwd.
-- Reviewed corrective source9900fdd;178 Node tests pass, original128 retained.
-- Real Pi Web1.202611.1 shell graphically tested on Cristina with synthetic isolated projects;
-  separate Chromium155 harness17 checks at390/1280 also pass. Boundaries in report.
-- PR#5 remains open/draft at609c6bb; API and local Git confirm no conflicts, mergeable clean.
-- Feature draft created after the user's GitHub login on Cristina:
-  https://github.com/diniket/pi-openspec-status/pull/6, base audit/final-hardening-20261112,
-  initial head22156e17bd6b9caba38afc7ae3a04756754e1294; open/draft/unmerged, mergeable clean.
-  Full body packet:PR-WORKSPACE-EXPERIENCE.md. Do not retarget until approved PR#5 merge.
-- Authentication blocker resolved without reading credentials/cookies. No feature-PR blocker remains.
-- PUCP separate worktree `/home/marco/Progetti/pi-unified-control-plane-openspec`,
-  branch feature/openspec-plugin-release. Inactive release bundle hosts[], real package bytes,
-  rollback609c6bb, existing engine reused; commit88fd36f59e0113fe2d9fcb9e04ba9d67960bc323.
- 2 dedicated +84 existing offline tests pass. No PUCP remote configured. Never enable/apply
- without production GO.
-- Baseline/candidate tarball/module checksums are recorded in PUCP PROVENANCE.json; final0.2.0
-  source/package/tag cannot exist before approved merges and version commit.
-- Production original checkout/symlink/bytes remain609c6bb. No hosting daemon restart/stop.
-- No merge, final tag, npm publication, production adoption/deployment or destructive cleanup.
+User explicitly approved merges, release finalization, tag/npm and PUCP deployment.
+- PR#5 merged0e49fd065df5f919f4064f1e30639e6e022cc262.
+- PR#6 retargeted main then merged06210b677ba7565b0dc4a36f3cdd8bca084b9282.
+- Release source/main version commitb7d92d7b0fcdf281a7398f97ac93f83eaf43419a,0.2.0.
+- Local annotatedv0.2.0 exists at that source. **Remote tag push BLOCKED by Guardian** because
+  non-branch refs are unsupported. No alternate executor or tag-creation API permitted.
+- npm publication **BLOCKED by authentication** (whoami401); normal web login started.
+  Do not read/copy credentials. Human login, then maintainer check, exact tarball publish+integrity check.
+- Exact tarball and checksums: RELEASE-EXECUTION.md, /tmp/openspec-v020-artifacts,
+  canonical PUCP configs/openspec-status-web/PROVENANCE.json and artifacts/.
+- Production is NOWv0.2.0 through immutable PUCP release
+  1794517730-4feb742f6e-d3c5e033d9fc, check ALLINEATO. Old checkout remains609c6bb, clean.
+- Real rollback to baseline1794517603-34c3305d18-7870ab4274dc was HTTP-byte-verified,
+  thenv0.2.0 restored. Only this plugin changed; no daemon restart, other plugins unchanged.
+-178 final tests plus2+84 PUCP tests pass. Real-shell GUI uses Cristina only, synthetic projects;
+  postdeploy smoke uses the actual immutable deployed package, not a development checkout.
 
-Lab web/daemon/tunnel are stopped; synthetic evidence retained. If continuing: recheck final refs,
-clean trees and PR#5/#6. Never click merge without explicit approval. Follow RELEASE.md for
-ancestry-preserving sequential merge operations and PUCP runbook for separately approved
-baseline-first ownership transition. Preserve all evidence/artifacts.
+Remaining human action: handle the unsupported remote tag push manually, and authenticate the
+pending npm web login. Then reverify remote tag/maintainer/package absence and publish exact
+verified tarball. Do not claim remote tag/npm/GitHub release complete before those measurements.
+No branch/worktree/backup/release cleanup or hosting daemon restart is authorized/needed.
