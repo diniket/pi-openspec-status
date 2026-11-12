@@ -90,6 +90,10 @@ npm run benchmark   # synthetic polling latency/concurrency (5ms per host call)
 
 The source is in `src/pi-web-plugin.js`; `dist/pi-web-plugin.js` must stay identical. See [development notes](docs/DEVELOPMENT.md) for internals.
 
+The README screenshots are produced by rendering that same `dist` build in Chromium over a
+synthetic fixture: [`scripts/panel-screenshot-harness.mjs`](scripts/panel-screenshot-harness.mjs)
+builds the page and documents how to capture it.
+
 Short [Pi Agent operational guide](docs/AGENT-OPERATIONS.md), [release procedure](docs/RELEASE.md),
 [changelog](CHANGELOG.md), [second independent review](docs/SECOND-REVIEW.md).
 

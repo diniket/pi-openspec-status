@@ -17,6 +17,9 @@ Thumbs.db
 # Local PI WEB state, if a dev symlinks the plugin in place from inside this checkout
 .pi-web/
 
+# Local Pi agent scratch in this checkout (browser_execute workspaces, session notes)
+.pi/
+
 # Test output artefacts
 coverage/
 .nyc_output/
