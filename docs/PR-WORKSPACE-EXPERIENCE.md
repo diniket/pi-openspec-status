@@ -18,10 +18,12 @@ CLI execution from the plugin, services or LLM features.
 
 ## Verification
 
-- **174 tests pass, 0 failures/skips**, including all 128 PR #5 regressions.
+- **178 tests pass, 0 failures/skips**, including all 128 PR #5 regressions.
 - Build, exact src/dist comparison, syntax checks, diff check and npm pack dry-run pass.
 - Three behavior regressions demonstrably fail on `609c6bb` and pass on this branch.
 - Real Pi Web **1.202611.1** catalog/artifact discovery: zero diagnostics; loader/contribution/signal contract verified.
+- Second independent read-only review adjudicated; confirmed runtime pruning/shared probe/metadata bugs fixed with regressions.
+- Real isolated Pi Web shell **1.202611.1** on Cristina: search/filter/sort/summary/tasks/archive/batch/Files roundtrip/workspace switch/automatic update and390px layout verified with synthetic projects.
 - Real OpenSpec CLI **1.17.0**: six synthetic reference cases; unsupported cases explicitly deferred.
 - Real Chromium **155.0.8059.79**, synthetic host APIs: **17 assertions pass at both 390px and 1280px**,
   no page errors/unhandled rejections or horizontal overflow. Includes scroll and deferred tab focus across refresh.
@@ -33,8 +35,8 @@ CLI execution from the plugin, services or LLM features.
 | Calls (unchanged) | PR #5 latency | New latency | Peak concurrency before → after |
 |---:|---:|---:|---:|
 | 6 | 30ms | 21ms | 1 → 3 |
-| 172 | 871ms | 153ms | 1 → 6 |
-| 561 | 2,839ms | 482ms | 1 → 6 |
+| 172 | 872ms | 154ms | 1 → 6 |
+| 561 | 2,844ms | 482ms | 1 → 6 |
 
 The 172-call case is a synthetic equivalent, not a scan of private production data.
 
@@ -48,12 +50,18 @@ The 172-call case is a synthetic equivalent, not a scan of private production da
   Physical abort is signalled only when safe (e.g. last workspace owner leaves); abort-ignoring host transports
   cannot be forcibly terminated by a browser plugin. Queue time is included in the 15s request budget;
   index/detail/validation/probe operations also have a 60s deadline.
-- No live authenticated Pi Web shell test: the dedicated browser still times out reaching the LAN.
-  Host discovery is real; DOM integration uses an isolated synthetic host harness.
+- Real-shell GUI now uses Cristina's Firefox through a loopback SSH tunnel to an isolated instance,
+  never production. No real-GUI hung-host fault injection or multi-panel race stress; those paths
+  retain Node/harness coverage. Console has bundled-plugin/host warnings, no observed OpenSpec error.
+- PUCP release/rollback preparation is inactive (hosts[]); final0.2.0 package, merges, tag, npm and
+  production adoption/deploy all remain approval-gated.
 - The live install stays at **609c6bb**, with identical original bundle bytes. No branch/symlink/config/service
   change or feature deployment. One accidental byte-identical build invocation and automatic empty CDP
   workspace directories are transparently recorded in the evidence report; the empty directories were removed.
 
-Full evidence, commands, semantics and operational deviations:
+Current measured consolidation and review: [`docs/CONSOLIDATION.md`](docs/CONSOLIDATION.md),
+[`docs/SECOND-REVIEW.md`](docs/SECOND-REVIEW.md). This is a DRAFT, not permission to merge.
+
+Historical evidence, commands, semantics and operational deviations:
 [`docs/WORKSPACE-EXPERIENCE.md`](docs/WORKSPACE-EXPERIENCE.md),
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).

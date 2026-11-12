@@ -1,5 +1,10 @@
 # Workspace experience — implementation and verification
 
+Historical implementation-pass evidence. The continuation's178-test rerun, second independent
+review, successful guarded push and **real isolated Pi Web shell GUI** proof supersede delivery
+and integration blockers below: see [CONSOLIDATION.md](CONSOLIDATION.md). Original deviations
+and historical measurements are retained rather than rewritten.
+
 Unreleased evolution of PR #5. Base verified twice against GitHub pull/head and branch refs:
 `609c6bbe9be7cf586e87e94e6718978ea411e037`. Work branch:
 `feature/openspec-workspace-experience`, isolated worktree outside the installed checkout.

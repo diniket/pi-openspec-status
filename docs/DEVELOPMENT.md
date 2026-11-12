@@ -55,7 +55,24 @@ Re-inspected installed `@jmfederico/pi-web@1.202611.1`:
 
 A real browser with synthetic API responses verifies DOM behavior, **not** live shell integration.
 The isolated catalog test executes the host's real discovery/artifact code without changing any
-live plugin root or config. See the evidence report for the exact integration boundary.
+live plugin root or config. Additional real-shell tests now use Cristina's Firefox and an isolated
+Pi Web instance with synthetic projects; see CONSOLIDATION.md for the exact coverage/limits.
+
+## Safe real-shell lab
+
+`scripts/isolated-host.mjs HOST_PACKAGE SDK_PACKAGE /tmp/openspec-<unique-root> web|sessiond`
+launches only isolated processes, with explicit SDK path, empty separate agent profile, unique
+config/data/socket and port18504. It intentionally strips inherited hosting-instance variables
+and credentials; no production session/config/plugin roots are reused. Prepare synthetic projects
+and a plugin symlink **under the isolated data root only**. Launch each role with bg_run, register
+only synthetic projects via that instance, then test with Computer Use host `cristina`.
+If direct LAN routing fails, a loopback-only SSH reverse forward may connect Cristina127.0.0.1:18504
+to this isolated port; it does not modify firewall or production services. Stop all lab processes
+and the tunnel after testing. Do not capture the user's existing PI WEB window/transcripts.
+
+`node scripts/release-artifacts.mjs /tmp/openspec-<new-artifact-dir>` packages committed candidate
+and pinned609c6bb rollback with an exact four-file allowlist. Retains tarballs, module/package hashes
+and npm integrity for audit. No tag, publication, install or deployment occurs.
 
 ## Data model and scope
 

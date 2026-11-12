@@ -16,7 +16,7 @@ The plugin only reads workspace files through PI WEB's file API. It does not mod
 
 ## Install
 
-Contract/discovery verified with **PI WEB 1.202611.1** (plugin API v5); real Chromium checks use synthetic host APIs, not a live authenticated Pi Web shell. The workspace needs an `openspec/changes/` directory.
+Verified with **PI WEB 1.202611.1** (plugin API v5): isolated real-shell GUI tests on Cristina use actual host discovery/file/navigation APIs and synthetic projects. Separate Chromium harness tests still use simulated host APIs. See [consolidation evidence](docs/CONSOLIDATION.md) for coverage and remaining limits. The workspace needs an `openspec/changes/` directory.
 
 **From npm** (recommended). In PI WEB open **Settings → Pi packages**, enter
 `npm:pi-openspec-status-web` and choose **Install**. Then open **Settings → PI WEB plugins**,
@@ -33,6 +33,10 @@ ln -s "$(pwd)/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 ```
 
 Reload PI WEB and select the **OpenSpec** tab in a workspace.
+
+For managed production, prefer a verified immutable package release rather than a writable Git
+checkout. The prepared [PUCP integration](docs/PUCP-INTEGRATION.md) is inactive pending approval;
+never repoint the existing live checkout to test a feature. Develop in a separate worktree.
 
 The built plugin is already included in `dist/`, in the npm tarball as well as in the
 repository; you do not need to install dependencies or build it to use it. The package is
@@ -59,6 +63,9 @@ npm run benchmark   # synthetic polling latency/concurrency (5ms per host call)
 
 The source is in `src/pi-web-plugin.js`; `dist/pi-web-plugin.js` must stay identical. See [development notes](docs/DEVELOPMENT.md) for internals.
 
+Short [Pi Agent operational guide](docs/AGENT-OPERATIONS.md), [release procedure](docs/RELEASE.md),
+[changelog](CHANGELOG.md), [second independent review](docs/SECOND-REVIEW.md).
+
 MIT licensed. See [LICENSE](LICENSE).
 
 ---
@@ -69,6 +76,12 @@ Plugin di sola lettura per visualizzare le change OpenSpec direttamente in PI WE
 
 Per installazione e comandi usa le istruzioni sopra: pacchetto npm `pi-openspec-status-web` da
 **Impostazioni → Pi packages**, oppure il symlink da un checkout GitHub. Il controllo strutturale **non sostituisce** `openspec validate`.
+
+Collaudo aggiuntivo nella vera shell PI WEB1.202611.1 su Cristina, con progetti sintetici e
+istanza isolata: [evidenze e limiti](docs/CONSOLIDATION.md). Per produzione gestita è preparato
+un bundle PUCP inattivo con package immutabile e rollback verificato; serve il GO esplicito,
+non è stato distribuito. Sviluppare solo in un worktree separato, senza modificare checkout o
+symlink live. [Guida operativa breve per Pi Agent](docs/AGENT-OPERATIONS.md).
 
 ### Hardening notes
 
