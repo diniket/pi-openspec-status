@@ -1,6 +1,6 @@
 {
   "name": "pi-openspec-status-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "PI WEB plugin: a read-only OpenSpec tab in the workspace panel — active changes, artifacts, task progress and a structure check.",
   "keywords": [
     "pi-web.dev-plugin",

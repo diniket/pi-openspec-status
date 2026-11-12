@@ -1,54 +1,61 @@
-# v0.2.0 release — approval-gated procedure
+# v0.2.0 release
 
-## Current anchors
+Explicit user approval to complete the reserved merge/tag/npm/PUCP operations was received
+on2026-11-12. Session daemon restart remains unauthorized and unnecessary.
 
-- main: `2b08bcefacee0a4ce8cb29bf4ad31d2fb226d3e6`.
-- PR #5: https://github.com/diniket/pi-openspec-status/pull/5
-  head `609c6bbe9be7cf586e87e94e6718978ea411e037`, open/draft/unmerged.
-- Feature draft PR #6: https://github.com/diniket/pi-openspec-status/pull/6,
-  `feature/openspec-workspace-experience`, initial PR head
-  `22156e17bd6b9caba38afc7ae3a04756754e1294`; see remote refs for delivery-doc successors.
-  Base is PR #5 at609c6bb, not main. Both PRs remain draft/open/unmerged and mergeable clean.
-- GitHub API now reports PR #5 mergeable=true, mergeable_state=clean. Local merge-tree
-  succeeds and main is an ancestor. Earlier mergeable=false is not a current conflict.
+## Verified sequential merges
 
-## Sequential operations (NOT executed)
+1. PR#5 https://github.com/diniket/pi-openspec-status/pull/5 merged into main as
+   `0e49fd065df5f919f4064f1e30639e6e022cc262`, preserving head609c6bb.
+2. PR#6 https://github.com/diniket/pi-openspec-status/pull/6 retargeted to main after#5,
+   feature-only23-file diff verified; merged as
+   `06210b677ba7565b0dc4a36f3cdd8bca084b9282`, preserving head60d29d4.
 
-Require explicit approval of the merge operations and re-read remote refs/checks first.
-Keep merge commits (no squash/rebase) to preserve ancestry of the stacked feature branch.
+Both merges used no-ff merge commits and ordinary Guardian-protected main pushes from this
+isolated worktree. GitHub API confirms both closed/merged. No force/rebase/squash and no
+branch/worktree deletion. Main contains609c6bb and60d29d4 by ancestry checks.
 
-1. Review PR #5 at exactly `609c6bbe9be7cf586e87e94e6718978ea411e037`.
-   Update its outdated evidence/checklist with current host proof. Mark ready only after review.
-2. Merge PR #5 -> main, recording the actual merge SHA M1. Verify
-   `git merge-base --is-ancestor 609c6bb origin/main` after fetch. If this fails, STOP.
-3. Retarget the feature draft PR from `audit/final-hardening-20261112` to main.
-   Check the diff is feature-only, review the final feature SHA, and run the complete suite again.
-4. Merge feature -> main with a merge commit; record actual SHA M2. Verify both
-   609c6bb and the reviewed feature SHA are ancestors of M2. Do not delete branches/worktrees.
-5. Only now create a release branch/worktree from updated main, set package version to 0.2.0,
-   date the changelog, and commit. Final main/version commit requires the approved merge/release
-   process; no final SHA is available beforehand.
-6. Run `npm test`, build, byte comparison, syntax/diff checks, host contract, CLI reference,
-   baseline regression proof, pack inspection, isolated shell GUI checks and PUCP offline proof.
-7. `npm pack --json` in that release worktree; list contents and compute SHA-256 and npm integrity.
-   Reject unexpected files, dependencies, node_modules, sessions, credentials or temporary data.
-   Record tarball SHA, module SHA, full source commit and host/CLI versions in release notes.
-8. After explicit tag approval: annotated `git tag -a v0.2.0 <release-sha> -m 'v0.2.0'`,
-   inspect the tag, then a plain guarded tag push. Never force or retag an existing release.
-9. After explicit npm approval and authenticated account/name ownership check:
-   `npm publish <verified-tarball> --access public`. Check npm dist integrity against the
-   approved artifact. Create GitHub release notes from CHANGELOG plus compatibility/limits.
-10. Production deployment is a separate GO through PUCP, never an npm side effect.
+## Version/package/tag verification
 
-## Package availability
+The version/changelog release commit follows both merges. Resolve the final source with
+`git rev-parse v0.2.0^{commit}` after inspecting the annotated tag. Package from that exact source,
+not a development tree: `npm pack --json --ignore-scripts`; inspect the exact four-file allowlist
+(LICENSE,README,package.json,dist/pi-web-plugin.js), module SHA256, tarball SHA256/npm integrity.
+No dependencies, node_modules, temporary data, sessions or credentials belong in the package.
 
-Measured registry response: `pi-openspec-status-web` exists; latest 0.1.0; versions
-0.0.0-stage and 0.1.0. 0.2.0 is absent. Existing package availability does not prove that
-this session has npm publication rights. No npm login/token has been read or requested.
+Before tag/deploy run178 Node tests, build/source-dist/syntax/diff/pack checks, real installed
+PiWeb1.202611.1 catalog/artifact contract, CLI1.17.0 reference and baseline regression proof.
+The real-shell Cristina GUI and separate Chromium155 harness evidence are in CONSOLIDATION.md.
+After deployment repeat served-byte/manifest/GUI checks without restarting the daemon.
 
-## Release note template
+Annotated tag command: `git tag -a v0.2.0 <release-sha> -m 'OpenSpec Status Web v0.2.0'`,
+inspect object then plain guarded `git push origin v0.2.0`. Never force/retag an existing version.
+Tag source SHA and package checksums are recorded in the execution report once measured.
 
-Use CHANGELOG.md's unreleased section, actual PR URLs/merge/source SHAs, exact tarball checksum,
-compatibility versions and remaining integration limitations. A local structural pass is not
-`openspec validate`; search/summary are loaded-only; Stop is cooperative; transport cancellation
-requires host cooperation. Do not invent the final release commit or checksum in advance.
+## npm (separate from deployment)
+
+Registry package `pi-openspec-status-web` is owned by `diniket`; existing latest0.1.0.
+Initial `npm whoami` checks on pi-hub and Cristina returned401: publication is not claimed until
+an authenticated account with maintainer rights is measured. Never copy/read authentication
+tokens into chat, repository, logs or another machine. Use normal npm web login if required.
+After authentication, publish ONLY the verified v0.2.0 tarball using `npm publish <tarball>
+--access public`, then compare registry dist integrity with the approved package. Existing
+version rejection is a stop, not permission to overwrite. No duplicate publication.
+
+## PUCP and rollback
+
+Use the existing PUCP release bundle, pinned package/source hashes, committed provenance and
+baseline-first ownership adoption. Check/dry-run, adopt609c6bb baseline under the specifically
+approved force ownership-transfer mechanism, then apply the verified0.2.0 candidate normally.
+Verify immutable current release, HTTP module bytes and GUI. Record baseline/candidate release
+IDs. Rollback only this bundle to the verified baseline and verify its module SHA. No daemon
+restart or unrelated-plugin modification. Detailed runbook: PUCP-INTEGRATION.md and PUCP
+`docs/openspec-plugin-release.md`.
+
+## Compatibility / release notes
+
+CHANGELOG.md contains the release highlights. One browser-only APIv5 module, zero runtime
+dependencies, read-only workspace APIs. Loaded-only counts/search(max40), max12 capabilities,
+cooperative Stop,15s queue-inclusive request timeout and60s scan deadline. Local structure pass
+is not CLI validation; unsupported/custom metadata remains unverified. Host-ignored AbortSignal
+cannot forcibly terminate transport. Real GUI fault-injection/federation remain untested.

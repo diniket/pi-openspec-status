@@ -1,5 +1,10 @@
 # Definitive consolidation — measured evidence, 2026-11-12
 
+This is the retained pre-release review/evidence snapshot. The user subsequently approved
+completion of merge/tag/npm/deploy operations; PR#5/#6 are now merged. See RELEASE.md and
+RELEASE-EXECUTION.md (when present) for actual release/deployment results, not the historical
+approval boundaries below.
+
 ## DONE — initial state, ancestry and protected delivery
 
 Actual cwd: `/home/marco/Progetti/pi-openspec-workspace-experience`.

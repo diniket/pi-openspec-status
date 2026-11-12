@@ -35,8 +35,8 @@ ln -s "$(pwd)/pi-openspec-status" ~/.pi-web/plugins/pi-openspec-status
 Reload PI WEB and select the **OpenSpec** tab in a workspace.
 
 For managed production, prefer a verified immutable package release rather than a writable Git
-checkout. The prepared [PUCP integration](docs/PUCP-INTEGRATION.md) is inactive pending approval;
-never repoint the existing live checkout to test a feature. Develop in a separate worktree.
+checkout. The [PUCP integration](docs/PUCP-INTEGRATION.md) uses verified immutable releases and a
+baseline rollback; never repoint an installed development checkout to test a feature. Develop in a separate worktree.
 
 The built plugin is already included in `dist/`, in the npm tarball as well as in the
 repository; you do not need to install dependencies or build it to use it. The package is
@@ -79,8 +79,8 @@ Per installazione e comandi usa le istruzioni sopra: pacchetto npm `pi-openspec-
 
 Collaudo aggiuntivo nella vera shell PI WEB1.202611.1 su Cristina, con progetti sintetici e
 istanza isolata: [evidenze e limiti](docs/CONSOLIDATION.md). Per produzione gestita è preparato
-un bundle PUCP inattivo con package immutabile e rollback verificato; serve il GO esplicito,
-non è stato distribuito. Sviluppare solo in un worktree separato, senza modificare checkout o
+un bundle PUCP con package immutabile e rollback verificato; lo stato effettivo del rilascio
+è registrato nel report, separatamente dalla pubblicazione npm. Sviluppare solo in un worktree separato, senza modificare checkout o
 symlink live. [Guida operativa breve per Pi Agent](docs/AGENT-OPERATIONS.md).
 
 ### Hardening notes
@@ -112,7 +112,8 @@ error (like `openspec validate --strict`), and a `Why` section shorter than 50 c
 or a missing `proposal.md` are reported as well. Those are the only known divergences and
 they are conservative local checks, not a guarantee of complete CLI equivalence. Custom schemas and unsupported metadata are also unverified.
 
-See [workspace experience evidence](docs/WORKSPACE-EXPERIENCE.md) for tests, reproducible before/after benchmarks, cancellation semantics and integration limits. This evolution has not been published to npm; use its PR checkout when reviewing it.
+See [workspace experience evidence](docs/WORKSPACE-EXPERIENCE.md) for tests, reproducible before/after benchmarks, cancellation semantics and integration limits. Version 0.2.0 incorporates merged PRs #5 and #6. See the release report for npm availability
+and the exact deployed release; do not infer publication from the Git version alone.
 
 An optional real-browser smoke check is available as `python scripts/browser-smoke.py`
 with Python Playwright and `/usr/bin/chromium` installed. It serves the checkout locally,
