@@ -80,10 +80,16 @@ implicitly bypasses this block by creating the tag.
 ## BLOCKED — npm authentication
 
 Registry package maintainer isdiniket; initial npm whoami on bothpi-hub andCristina returned401.
-Normal npm web login was started; human authentication is required. No tokens read/copied into
-chat/repositories or across machines. Publication is NOT claimed. Once authenticated, measure
-npm whoami and owner rights, publish only the verified tarball, then compare registry integrity.
-Do not overwrite an existing0.2.0 version. GitHub release publication follows the real remote tag.
+A normal `npm login --auth-type=web` was started and its one-time CLI URL was opened on Cristina
+only. No credentials were entered by Pi and no tokens were read/copied into chat, repositories or
+another machine. The user did not complete the browser login within the validity window: the web
+page returned `Invalid or Expired Token`, and the CLI process exited1 at the `Username:` prompt
+after about5 minutes. This is an expired authentication attempt, **not** a rejected package or
+permission decision. Publication is NOT claimed and registry still has latest0.1.0.
+A fresh login session and immediate human completion are required. Afterwards measure
+npm whoami and owner rights, publish ONLY the verified tarball, then compare registry dist
+integrity. Do not overwrite an existing0.2.0 version. GitHub release publication follows the
+real remote tag, which remains blocked as described above.
 
 ## Retention and known limits
 
