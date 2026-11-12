@@ -77,7 +77,25 @@ tag exists; remote tag is absent at last ls-remote check. A human must handle th
 push manually; do not represent the main push as tag publication or create a GitHub release that
 implicitly bypasses this block by creating the tag.
 
-## BLOCKED — npm authentication
+## DONE — npm authentication and publication (2026-11-12)
+
+The legacy token in `~/.npmrc` was stale: `npm whoami` returned401, and the first publish attempt
+(after the expired web-login attempt) was rejected with HTTP404 without publishing anything;
+registry still advertised latest0.1.0 and no0.2.0 version existed.
+
+The user then completed `npm login --auth-type=web` in a browser on Cristina. `npm whoami` now
+returns `diniket`, and the verified tarball was published:
+
+```
+npm publish ./pi-openspec-status-web-0.2.0.tgz --access public
++ pi-openspec-status-web@0.2.0
+```
+
+npm CLI reported success (`Your package is being processed and may take a few minutes`).
+Registry visibility/integrity propagation is an asynchronous CDN step and is verified separately
+below; do not claim registry availability before reading it back.
+
+## HISTORICAL — npm authentication blocker (resolved above)
 
 Registry package maintainer isdiniket; initial npm whoami on bothpi-hub andCristina returned401.
 A normal `npm login --auth-type=web` was started and its one-time CLI URL was opened on Cristina
