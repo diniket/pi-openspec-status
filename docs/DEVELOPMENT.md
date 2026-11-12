@@ -221,3 +221,22 @@ the user clicked again.
 PI WEB itself may not restore a deep link with `tool=openspec-status:openspec-status` during
 initial plugin activation. This issue is in the host route restore logic; open the project
 and select the OpenSpec tab as a workaround. No host patch is part of this plugin.
+
+## Final hardening (2026-11-12)
+
+See [audit and validation evidence](AUDIT-2026-11-12.md). The task summary parser now
+projects `parseTaskItems()` instead of maintaining a second scanner. Task content is shared
+between the index and document viewer; index reads retain their shorter 30-second freshness
+window. Forced UI refresh removes the index entry as well as child caches, so in-flight
+responses cannot become the refreshed cache generation. Obsolete validation results are
+not written back after their detail cache generation is removed.
+
+Document/detail/validation caches now prune completed entries after ten minutes or when
+over 256 entries (in-flight entries are preserved). The index remains capped at 16 completed
+workspace entries. Spec traversal is capped at 12 capability folders as well as 12 documents;
+incomplete listings must not be presented as proof of absence or structural validity.
+
+Directory entry names must be single path components. The host still owns workspace and
+symlink containment; this plugin has no direct filesystem access. It does not resolve
+worktrees separately: the host-selected workspace supplies the root, and cache keys include
+both machine and workspace identity.

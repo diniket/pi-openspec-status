@@ -63,7 +63,10 @@ async function renderWith(fs, workspaceId) {
   const ctx = createContext(fs, workspaceId);
   const el = makeElement();
   el.context = ctx;
-  await settle();
+  // Disk fixtures can take more than five event-loop ticks on a busy runner.
+  const deadline = Date.now() + 2000;
+  while (el.state === null && Date.now() < deadline) await tick();
+  assert.notEqual(el.state, null, "panel initial load must complete within 2 seconds");
   return { el, ctx, fs, state: el.state };
 }
 
@@ -1266,7 +1269,7 @@ describe("regression: archived changes polling", () => {
     const entry = name => ({ name, type: "directory", size: 0, modifiedAt: null });
     const files = {
       async listFiles(path) {
-        const p = path.replace(/\\/$/, "");
+        const p = path.replace(/\/$/, "");
         if (p === "openspec") return { entries: [entry("changes")], truncated: false };
         if (p === "openspec/changes") return { entries: [entry("archive")], truncated: false };
         if (p === "openspec/changes/archive") return { entries: archivedNames.map(entry), truncated: false };
@@ -1469,9 +1472,9 @@ describe("migliorie: validità OpenSpec", () => {
     assert.ok(result.reasons.some(r => r.includes("Why section")));
   });
 
-  test("skip_specs dichiarato -> valida senza deltas", () => {
+  test("skip_specs requires CLI metadata validation", () => {
     const result = inspectChangeValidity({ proposalText: proposalOk, hasProposal: true, specFiles: [], hasSpecs: false, skipSpecs: true });
-    assert.strictEqual(result.state, "valid");
+    assert.strictEqual(result.state, "unverified");
   });
 
   test("senza proposal leggibile -> unverified (nessun giudizio inventato)", () => {
@@ -1727,3 +1730,182 @@ describe("review: spec parser and ordered Markdown", () => {
 });
 
 console.log("OK: suite eseguita");
+
+describe("final hardening regressions", () => {
+  test("indented fences and false closing fences cannot inflate task counts", () => {
+    const text = "## Work\n  ```md\n- [x] example\n``` still code\n- [x] another example\n  ```\n- [ ] real\n";
+    const groups = parseTaskGroups(text);
+    assert.equal(groups[0].total, 1);
+    assert.equal(groups[0].completed, 0);
+    assert.deepEqual(groups, parseTaskItems(text).map(({ items, ...group }) => group));
+  });
+
+  test("malformed documents and synchronous host errors remain read errors", async () => {
+    for (const [i, readFile] of [() => ({ content: 17 }), () => { throw new Error("offline"); }].entries()) {
+      const doc = await loadDoc(createContext({ readFile }, `malformed-doc-${i}`), "tasks.md");
+      assert.equal(doc.state, "error");
+    }
+  });
+
+  test("malformed listings and traversal entries cannot become empty or escape paths", async () => {
+    for (const entries of [null, [null], [{name: "../escape", type: "directory"}]]) {
+      const paths = [];
+      const ctx = createContext({ async listFiles(path) {
+        paths.push(path);
+        return {entries: path === "openspec" ? [] : entries};
+      } }, `bad-list-${JSON.stringify(entries)}`);
+      assert.equal((await loadOpenSpecState(ctx)).state.kind, "error");
+      assert.equal(paths.length, 2);
+    }
+  });
+
+  test("truncated change listings leave missing artifacts unknown", async () => {
+    const ctx = createContext({ async listFiles() { return {entries: [], truncated: true}; } }, "partial-artifacts");
+    const detail = await loadChangeDetail(ctx, "demo");
+    assert.equal(detail.artifacts.proposal, "unknown");
+    assert.equal(detail.artifacts.tasks, "unknown");
+    assert.ok(detail.errors.length);
+  });
+
+  test("workspace key separators cannot alias different machines", async () => {
+    const fs = createMockFs({tree: {openspec: {type: "directory"}, "openspec/changes": {type: "directory"}}});
+    const a = createContext(fs, "b:c"); a.machine.id = "a";
+    const b = createContext(fs, "c"); b.machine.id = "a:b";
+    await loadOpenSpecState(a);
+    assert.equal((await loadOpenSpecState(b)).cacheHit, false);
+  });
+
+  const proposal = "## Why\n" + "A useful explanation of the proposed behavior. ".repeat(3) + "\n## What Changes\nChange behavior.\n";
+  test("fenced examples and empty scenarios cannot certify structure", () => {
+    for (const content of [
+      "```md\n## ADDED Requirements\n### Requirement: Demo\nSystem MUST work\n#### Scenario: Example\nBody\n```",
+      "## ADDED Requirements\n### Requirement: Demo\nSystem MUST work\n#### Scenario: Empty\n",
+    ]) {
+      assert.equal(inspectChangeValidity({proposalText: proposal, hasProposal: true, hasSpecs: true, specFiles: [{path: "spec.md", content}]}).state, "invalid");
+    }
+  });
+
+  test("removed and renamed deltas are deferred rather than falsely rejected", () => {
+    for (const section of ["REMOVED", "RENAMED"]) {
+      assert.equal(inspectChangeValidity({proposalText: proposal, hasProposal: true, hasSpecs: true, specFiles: [{path: "spec.md", content: `## ${section} Requirements\n### Requirement: Retired\n`}]}).state, "unverified");
+    }
+  });
+
+  test("index and tasks viewer share the document read", async () => {
+    const fs = await createFsFromDir(fix("os-partial"));
+    let reads = 0;
+    const read = fs.readFile.bind(fs);
+    fs.readFile = path => { if (path.endsWith("tasks.md")) reads++; return read(path); };
+    const ctx = createContext(fs, "shared-task-read");
+    const {state} = await loadOpenSpecState(ctx);
+    await loadDoc(ctx, `openspec/changes/${state.changes[0].name}/tasks.md`);
+    assert.equal(reads, 1);
+  });
+
+  test("refresh during an index read starts a fresh generation", async () => {
+    let release;
+    let scans = 0;
+    const files = { async listFiles(path) {
+      if (path === "openspec") {
+        scans++;
+        if (scans === 1) await new Promise(resolve => { release = resolve; });
+      }
+      return {entries: []};
+    } };
+    const ctx = createContext(files, "refresh-in-flight-final");
+    const el = makeElement(); el.context = ctx;
+    await tick();
+    el._manualRefresh();
+    await settle();
+    assert.equal(scans, 2);
+    release();
+    await settle();
+    assert.equal(el.state.kind, "no-active");
+    el.disconnectedCallback();
+  });
+});
+
+describe("resource and UI hardening", () => {
+  test("empty capability directories are bounded in detail and polling", async () => {
+    const calls = [];
+    const dir = name => ({name, type: "directory"});
+    const files = { async listFiles(path) {
+      path = path.replace(/\/$/, ""); calls.push(path);
+      if (path === "openspec/changes") return {entries: [dir("demo")]};
+      if (path === "openspec/changes/demo") return {entries: [dir("specs")]};
+      if (path.endsWith("/specs")) return {entries: Array.from({length: 1000}, (_,i) => dir(`cap-${i}`))};
+      return {entries: []};
+    }};
+    const ctx = createContext(files, "bounded-capabilities");
+    const detail = await loadChangeDetail(ctx, "demo");
+    assert.equal(detail.specs.truncated, true);
+    assert.equal(calls.length, 14);
+    calls.length = 0;
+    const el = new OpenspecPanelElement();
+    await el._probe(ctx);
+    assert.equal(calls.length, 15);
+  });
+
+  test("document cache evicts old entries instead of growing indefinitely", async () => {
+    let reads = 0;
+    const ctx = createContext({async readFile() { reads++; return {content: "text"}; }}, "bounded-doc-cache");
+    for (let i = 0; i < 258; i++) await loadDoc(ctx, `doc-${i}.md`);
+    await loadDoc(ctx, "doc-0.md");
+    assert.equal(reads, 259);
+  });
+
+  test("poll failure marks displayed data as potentially stale", async () => {
+    const el = makeElement();
+    const ctx = createContext({async listFiles() { return {entries: []}; }}, "poll-failure-ui");
+    el.context = ctx; await settle();
+    ctx.files.listFiles = async () => { throw Error("offline"); };
+    await el._checkExternalChanges();
+    assert.equal(el.shadowRoot.querySelector("#openspec-stamp").textContent, "Update check failed");
+    ctx.files.listFiles = async () => ({entries: []});
+    await el._checkExternalChanges(); await settle();
+    assert.notEqual(el.shadowRoot.querySelector("#openspec-stamp").textContent, "Update check failed");
+    el.disconnectedCallback();
+  });
+
+  test("truncated tasks warn that totals describe a partial file", async () => {
+    const fs = createMockFs({tree: {
+      openspec: {type:"directory"}, "openspec/changes": {type:"directory"},
+      "openspec/changes/demo": {type:"directory"}, "openspec/changes/demo/tasks.md": {type:"file"}
+    }, contents: {"openspec/changes/demo/tasks.md": "## Work\n- [x] visible"}, truncatedReads: ["openspec/changes/demo/tasks.md"]});
+    const el = makeElement();el.context = createContext(fs,"partial-task-ui"); await settle();
+    el._openChange("demo"); await settle();el._openTab("tasks");await settle();
+    assert.match(el.shadowRoot.querySelector("#openspec-tabpanel").textContent, /only the readable part/);
+    el.disconnectedCallback();
+  });
+});
+
+describe("freshness and incomplete specs", () => {
+  test("an expired index does not reuse task content for a longer document TTL", async () => {
+    let reads = 0;
+    const fs = createMockFs({tree: {openspec:{type:"directory"},"openspec/changes":{type:"directory"},"openspec/changes/demo":{type:"directory"},"openspec/changes/demo/tasks.md":{type:"file"}},contents:{"openspec/changes/demo/tasks.md":"## Work\n- [ ] task"}});
+    const read=fs.readFile.bind(fs);fs.readFile=path=>{reads++; return read(path);};
+    const ctx=createContext(fs,"task-ttl-regression");
+    await loadOpenSpecState(ctx);
+    const now=Date.now;
+    try {
+      Date.now=()=>now()+31_000;
+      await loadOpenSpecState(ctx);
+      assert.equal(reads,2);
+    } finally {Date.now=now;}
+  });
+  test("an empty truncated spec listing remains unknown", async () => {
+    const ctx=createContext({async listFiles(path){return {entries:path.endsWith('/specs/')?[]:[{name:'specs',type:'directory'}],truncated:true};}},"unknown-spec-list");
+    const detail=await loadChangeDetail(ctx,'demo');
+    assert.equal(detail.specs.state,'unknown');
+    assert.equal(detail.artifacts.specs,'unknown');
+  });
+});
+
+
+test("requirements outside delta sections cannot certify a change", () => {
+  const result = inspectChangeValidity({
+    hasProposal: true, proposalText: "## Why\n" + "Reason. ".repeat(10) + "\n## What Changes\nWork.",
+    hasSpecs: true, specFiles: [{path: "spec.md", content: "## ADDED Requirements\n## Notes\n### Requirement: Orphan\nSystem MUST work.\n#### Scenario: Demo\nBody."}],
+  });
+  assert.equal(result.state, "invalid");
+});

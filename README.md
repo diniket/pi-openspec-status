@@ -62,3 +62,19 @@ Plugin di sola lettura per visualizzare le change OpenSpec direttamente in PI WE
 
 Per installazione e comandi usa le istruzioni sopra: pacchetto npm `pi-openspec-status-web` da
 **Impostazioni → Pi packages**, oppure il symlink da un checkout GitHub. Il controllo strutturale **non sostituisce** `openspec validate`.
+
+### Hardening notes
+
+Directory/file responses that cannot be verified are reported as unknown or read errors.
+Truncated task documents explicitly label their partial totals. A failed background check
+marks the displayed data as potentially stale and retries on the next polling interval.
+
+The local structure check handles proposal sections and ADDED/MODIFIED requirement
+blocks outside fenced examples. REMOVED/RENAMED deltas and `skip_specs` metadata are
+reported as **unverified**: use the OpenSpec CLI for their full semantics. It does not
+check existing main specs, schema-specific artifacts, or cross-file conflicts.
+
+An optional real-browser smoke check is available as `python scripts/browser-smoke.py`
+with Python Playwright and `/usr/bin/chromium` installed. It serves the checkout locally,
+uses synthetic fixture data through a host API harness, and writes a screenshot to
+`/tmp/openspec-browser-mobile.png`. This is separate from testing inside PI WEB itself.
