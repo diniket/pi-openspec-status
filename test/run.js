@@ -485,7 +485,10 @@ describe("pannello DOM", () => {
     el.disconnectedCallback();
     // attesi che il render (bloccato) non produca nulla
     await new Promise(r => setTimeout(r, d + 100));
-    assert.strictEqual(el.shadowRoot.querySelector("#openspec-body").children.length, 0);
+    const body = el.shadowRoot.querySelector("#openspec-body");
+    // Nessun dato della risposta in volo: il segnaposto statico non e' un render.
+    assert.strictEqual(body.querySelector(".os-list"), null);
+    assert.ok(!body.textContent.includes("alpha"), body.textContent);
   });
 });
 
@@ -1748,15 +1751,36 @@ describe("final hardening regressions", () => {
   });
 
   test("malformed listings and traversal entries cannot become empty or escape paths", async () => {
-    for (const entries of [null, [null], [{name: "../escape", type: "directory"}]]) {
+    // Forma della risposta sbagliata: resta un errore (il host non ha risposto
+    // come da contratto).
+    for (const entries of [null, "nope", {}]) {
       const paths = [];
       const ctx = createContext({ async listFiles(path) {
         paths.push(path);
-        return {entries: path === "openspec" ? [] : entries};
+        return path === "openspec" ? { entries: [] } : { entries };
       } }, `bad-list-${JSON.stringify(entries)}`);
       assert.equal((await loadOpenSpecState(ctx)).state.kind, "error");
       assert.equal(paths.length, 2);
     }
+    // Una singola entry inutilizzabile: si scarta, l'elenco resta leggibile e
+    // il percorso non viene mai costruito con quel nome.
+    const paths = [];
+    const ctx = createContext({ async listFiles(path) {
+      paths.push(path);
+      if (path === "openspec") return { entries: [{ name: "changes", type: "directory" }] };
+      return { entries: [
+        { name: "alpha", type: "directory" },
+        { name: "../escape", type: "directory" },
+        { name: "weird\\name", type: "file" },
+        { name: "no-type" },
+        null,
+      ] };
+    } }, "bad-entries");
+    const state = (await loadOpenSpecState(ctx)).state;
+    assert.equal(state.kind, "ready");
+    assert.deepEqual(state.changes.map(c => c.name), ["alpha"]);
+    assert.equal(state.truncated, true, "un elenco incompleto va dichiarato");
+    assert.ok(!paths.some(p => p.includes("..") || p.includes("weird")), JSON.stringify(paths));
   });
 
   test("truncated change listings leave missing artifacts unknown", async () => {
@@ -1902,10 +1926,362 @@ describe("freshness and incomplete specs", () => {
 });
 
 
-test("requirements outside delta sections cannot certify a change", () => {
-  const result = inspectChangeValidity({
-    hasProposal: true, proposalText: "## Why\n" + "Reason. ".repeat(10) + "\n## What Changes\nWork.",
-    hasSpecs: true, specFiles: [{path: "spec.md", content: "## ADDED Requirements\n## Notes\n### Requirement: Orphan\nSystem MUST work.\n#### Scenario: Demo\nBody."}],
+// ──────────────────────────────────────────────────────────────────────
+// Allineamento al CLI: requisiti fuori dalle sezioni delta
+// ──────────────────────────────────────────────────────────────────────
+const PROPOSAL_OK_TEXT = "## Why\n" + "Reason. ".repeat(10) + "\n## What Changes\nWork.";
+const SPEC_VALID = "## ADDED Requirements\n\n### Requirement: Real\nSystem MUST work.\n\n#### Scenario: Works\n- **WHEN** x\n- **THEN** y\n";
+
+test("requirements outside delta sections are warnings, not blocking errors", () => {
+  // Verificato contro `openspec validate` 1.17: il CLI ignora questi requisiti
+  // e lo segnala come WARNING, quindi una change con un delta valido resta
+  // conforme. Prima erano un errore bloccante (falso "structure!").
+  const withValidDelta = inspectChangeValidity({
+    hasProposal: true, proposalText: PROPOSAL_OK_TEXT, hasSpecs: true,
+    specFiles: [{ path: "spec.md", content: SPEC_VALID + "\n## Notes\n### Requirement: Orphan\nSystem MUST also work.\n\n#### Scenario: Demo\nBody.\n" }],
   });
-  assert.equal(result.state, "invalid");
+  assert.equal(withValidDelta.state, "valid");
+  assert.deepEqual(withValidDelta.reasons, []);
+  assert.ok(withValidDelta.warnings.some(w => w.includes("outside a delta section")), JSON.stringify(withValidDelta.warnings));
+
+  // Senza alcun requisito dentro il delta la change resta invalida: il CLI da'
+  // "Delta sections ... were found, but no requirement entries parsed".
+  const onlyOrphan = inspectChangeValidity({
+    hasProposal: true, proposalText: PROPOSAL_OK_TEXT, hasSpecs: true,
+    specFiles: [{ path: "spec.md", content: "## ADDED Requirements\n## Notes\n### Requirement: Orphan\nSystem MUST work.\n#### Scenario: Demo\nBody." }],
+  });
+  assert.equal(onlyOrphan.state, "invalid");
+  assert.ok(onlyOrphan.reasons.some(r => r.includes('no "### Requirement:" block')), JSON.stringify(onlyOrphan.reasons));
+  assert.ok(!onlyOrphan.reasons.some(r => r.includes("outside a delta section")));
+});
+
+describe("review follow-up: polling, entry anomale, CLI alignment", () => {
+  const entry = (name, type = "directory") => ({ name, type, size: 0, modifiedAt: "2026-01-01T00:00:00.000Z" });
+  const stampOf = el => el.shadowRoot.querySelector("#openspec-stamp").textContent;
+  const bodyOf = el => el.shadowRoot.querySelector("#openspec-body");
+
+  test("un archivio illeggibile non spegne il controllo delle modifiche esterne", async () => {
+    // `openspec/changes/archive` illeggibile (es. symlink fuori dal workspace):
+    // il pannello resta corretto e il polling continua a funzionare.
+    const state = { changes: [] };
+    const files = {
+      async listFiles(path) {
+        const p = String(path).replace(/\/$/, "");
+        if (p === "openspec") return { entries: [entry("changes")] };
+        if (p === "openspec/changes") return { entries: [entry("archive"), ...state.changes.map(n => entry(n))] };
+        if (p === "openspec/changes/archive") throw new Error("Path escapes workspace");
+        if (state.changes.includes(p.slice("openspec/changes/".length))) return { entries: [entry("proposal.md", "file")] };
+        throw new Error("nope " + p);
+      },
+      async readFile() { return { content: "# doc", binary: false, truncated: false }; },
+    };
+    const el = makeElement();
+    el.context = createContext(files, "broken-archive");
+    await settle();
+    assert.equal(el.state.kind, "no-active");
+    await el._checkExternalChanges();
+    assert.notEqual(stampOf(el), "Update check failed");
+    state.changes.push("nuova");
+    await el._checkExternalChanges();
+    await settle();
+    assert.equal(el.state.kind, "ready");
+    assert.deepEqual(el.state.changes.map(c => c.name), ["nuova"]);
+    el.disconnectedCallback();
+  });
+
+  test("la sonda distingue errore, elenco incompleto e archivio leggibile", async () => {
+    const probeFor = async (id, behaviour) => {
+      const files = {
+        async listFiles(path) {
+          const p = String(path).replace(/\/$/, "");
+          if (p === "openspec") return { entries: [entry("changes")] };
+          if (p === "openspec/changes") return { entries: [entry("archive")] };
+          if (p === "openspec/changes/archive") return behaviour();
+          throw new Error("nope " + p);
+        },
+        async readFile() { throw new Error("no"); },
+      };
+      const el = makeElement();
+      el.context = createContext(files, id);
+      await settle();
+      const fingerprint = await el._probe(el.context);
+      el.disconnectedCallback();
+      return fingerprint;
+    };
+    assert.match(await probeFor("probe-err", () => { throw new Error("nope"); }), /archive\|err\|/);
+    assert.match(await probeFor("probe-trunc", () => ({ entries: [entry("old-a")], truncated: true })), /archive\|trunc\|old-a/);
+    assert.match(await probeFor("probe-ok", () => ({ entries: [entry("old-a")] })), /archive\|\|old-a/);
+  });
+
+  test("una `specs` che non e' una directory non spegne il polling", async () => {
+    const files = {
+      async listFiles(path) {
+        const p = String(path).replace(/\/$/, "");
+        if (p === "openspec") return { entries: [entry("changes")] };
+        if (p === "openspec/changes") return { entries: [entry("demo")] };
+        if (p === "openspec/changes/demo") return { entries: [entry("specs", "file")] };
+        if (p === "openspec/changes/demo/specs") throw new Error("Path is not a directory");
+        throw new Error("nope " + p);
+      },
+      async readFile() { throw new Error("no"); },
+    };
+    const el = makeElement();
+    el.context = createContext(files, "specs-is-file");
+    await settle();
+    assert.equal(el.state.kind, "ready");
+    assert.notEqual(await el._probe(el.context), null);
+    await el._checkExternalChanges();
+    assert.notEqual(stampOf(el), "Update check failed");
+    el.disconnectedCallback();
+  });
+
+  test("l'avviso di controllo fallito sopravvive ai rerender", async () => {
+    let fail = false;
+    const files = {
+      async listFiles(path) {
+        if (fail) throw new Error("offline");
+        const p = String(path).replace(/\/$/, "");
+        if (p === "openspec") return { entries: [entry("changes")] };
+        if (p === "openspec/changes") return { entries: [entry("demo")] };
+        if (p === "openspec/changes/demo") return { entries: [entry("proposal.md", "file")] };
+        throw new Error("nope " + p);
+      },
+      async readFile() { return { content: "# doc", binary: false, truncated: false }; },
+    };
+    const el = makeElement();
+    el.context = createContext(files, "stamp-persist");
+    await settle();
+    fail = true;
+    await el._checkExternalChanges();
+    assert.equal(stampOf(el), "Update check failed");
+    el._renderState(el.state);
+    assert.equal(stampOf(el), "Update check failed", "un rerender non deve cancellare l'avviso");
+    el._openChange("demo");
+    await settle();
+    assert.equal(stampOf(el), "Update check failed");
+    el.disconnectedCallback();
+  });
+
+  test("un refresh manuale riuscito non provoca un secondo giro di letture", async () => {
+    let fail = false;
+    // Conta le letture di stato (loadState parte da "openspec"); la sonda
+    // periodica parte da "openspec/changes" e non deve entrare nel conteggio.
+    let indexReads = 0;
+    const files = {
+      async listFiles(path) {
+        if (fail) throw new Error("offline");
+        const p = String(path).replace(/\/$/, "");
+        if (p === "openspec") { indexReads++; return { entries: [entry("changes")] }; }
+        if (p === "openspec/changes") return { entries: [] };
+        throw new Error("nope " + p);
+      },
+      async readFile() { throw new Error("no"); },
+    };
+    const el = makeElement();
+    el.context = createContext(files, "no-redundant-reload");
+    await settle();
+    fail = true;
+    await el._checkExternalChanges();
+    assert.equal(stampOf(el), "Update check failed");
+    fail = false;
+    el._manualRefresh();
+    await settle(8);
+    assert.notEqual(stampOf(el), "Update check failed");
+    const readsAfterRefresh = indexReads;
+    await el._checkExternalChanges();
+    await settle(8);
+    assert.equal(indexReads, readsAfterRefresh, "nessun reload completo dopo un refresh manuale riuscito");
+    el.disconnectedCallback();
+  });
+
+  test("un nome di entry anomalo non nasconde le change valide", async () => {
+    const paths = [];
+    const files = {
+      async listFiles(path) {
+        const p = String(path).replace(/\/$/, "");
+        paths.push(p);
+        if (p === "openspec") return { entries: [entry("changes")] };
+        if (p === "openspec/changes") return { entries: [entry("alpha"), entry("weird\\name", "file"), { name: "no-type" }, null] };
+        if (p === "openspec/changes/alpha") return { entries: [entry("proposal.md", "file")] };
+        throw new Error("nope " + p);
+      },
+      async readFile() { return { content: "# doc", binary: false, truncated: false }; },
+    };
+    const el = makeElement();
+    el.context = createContext(files, "odd-entry-ui");
+    await settle();
+    assert.match(bodyOf(el).textContent, /alpha/);
+    assert.equal(el.state.truncated, true);
+    assert.ok(!paths.some(p => p.includes("weird") || p.includes("no-type")), JSON.stringify(paths));
+    el.disconnectedCallback();
+  });
+
+  test("un elenco incompleto non trasforma un artefatto mancante in assente", async () => {
+    const ctx = createContext({
+      async listFiles(path) {
+        const p = String(path).replace(/\/$/, "");
+        if (p === "openspec/changes/demo") return { entries: [entry("proposal.md", "file"), { name: "a/b", type: "file" }] };
+        throw new Error("nope " + p);
+      },
+      async readFile() { return { content: "# d", binary: false, truncated: false }; },
+    }, "odd-entry-detail");
+    const detail = await loadChangeDetail(ctx, "demo");
+    assert.equal(detail.artifacts.proposal, "present");
+    assert.equal(detail.artifacts.design, "unknown");
+    assert.ok(detail.errors.length > 0);
+  });
+
+  test("cambio workspace con lettura lenta: nessun dato del workspace precedente", async () => {
+    const a = createMockFs({
+      tree: {
+        openspec: { type: "directory" }, "openspec/changes": { type: "directory" },
+        "openspec/changes/alpha-a": { type: "directory" }, "openspec/changes/alpha-a/proposal.md": { type: "file" },
+      },
+      contents: { "openspec/changes/alpha-a/proposal.md": "# A\n" },
+    });
+    const el = makeElement();
+    el.context = createContext(a, "switch-slow-a");
+    await settle();
+    assert.match(bodyOf(el).textContent, /alpha-a/);
+
+    let release;
+    const gate = new Promise(r => { release = r; });
+    let first = true;
+    const slow = {
+      async listFiles() { if (first) { first = false; await gate; } return { entries: [] }; },
+      async readFile() { return { content: "", binary: false, truncated: false }; },
+    };
+    el.context = createContext(slow, "switch-slow-b");
+    await tick(); await tick();
+    const body = bodyOf(el);
+    assert.ok(!body.textContent.includes("alpha-a"), body.textContent);
+    assert.match(body.textContent, /Loading OpenSpec/);
+    assert.equal(el.shadowRoot.querySelector("header .os-badge").hidden, true);
+    assert.equal(el.state, null);
+
+    release();
+    await settle();
+    assert.match(body.textContent, /No active changes|No OpenSpec project/);
+    el.disconnectedCallback();
+  });
+
+  test("una sonda superata non sovrascrive l'impronta piu' recente", async () => {
+    let holdNext = false;
+    let held = null;
+    let changes = ["alpha"];
+    const files = {
+      async listFiles(path) {
+        const p = String(path).replace(/\/$/, "");
+        if (p === "openspec") return { entries: [entry("changes")] };
+        if (p === "openspec/changes") return { entries: changes.map(n => entry(n)) };
+        if (p === "openspec/changes/alpha") {
+          if (holdNext) { holdNext = false; await new Promise(r => { held = r; }); }
+          return { entries: [entry("proposal.md", "file")] };
+        }
+        if (p === "openspec/changes/beta") return { entries: [entry("proposal.md", "file")] };
+        throw new Error("nope " + p);
+      },
+      async readFile() { return { content: "# doc", binary: false, truncated: false }; },
+    };
+    const el = makeElement();
+    el.context = createContext(files, "probe-order");
+    await settle();
+    assert.ok(!el.fingerprint.includes("beta"), el.fingerprint);
+
+    holdNext = true;
+    const stale = el._checkExternalChanges(); // legge il vecchio elenco e resta appesa
+    await tick();
+    changes = ["alpha", "beta"];
+    el._refreshFingerprint(el.context);       // sonda piu' recente, dati nuovi
+    await settle(8);
+    assert.match(el.fingerprint, /beta/);
+    held();
+    await stale;
+    await settle(8);
+    assert.match(el.fingerprint, /beta/, "la sonda vecchia non deve sovrascrivere quella recente");
+    el.disconnectedCallback();
+  });
+});
+
+describe("review follow-up: validazione allineata al CLI", () => {
+  const proposal = "## Why\n" + "Reason. ".repeat(10) + "\n## What Changes\nWork.";
+
+  test("uno scenario con corpo in un blocco di codice resta conforme (come il CLI)", () => {
+    const content = "## ADDED Requirements\n\n### Requirement: Demo\nThe system SHALL work.\n\n#### Scenario: Works\n```gherkin\nWHEN something\nTHEN works\n```\n";
+    const result = inspectChangeValidity({ proposalText: proposal, hasProposal: true, hasSpecs: true, specFiles: [{ path: "spec.md", content }] });
+    assert.equal(result.state, "valid");
+    assert.deepEqual(result.reasons, []);
+  });
+
+  test("nei file di spec un esempio fenced non certifica la struttura", () => {
+    const content = "```md\n## ADDED Requirements\n### Requirement: Demo\nSystem MUST work\n#### Scenario: Example\nBody\n```\n";
+    const result = inspectChangeValidity({ proposalText: proposal, hasProposal: true, hasSpecs: true, specFiles: [{ path: "spec.md", content }] });
+    assert.equal(result.state, "invalid");
+  });
+
+  test("un ## Why dentro un blocco di codice e' trattato come il CLI", () => {
+    // Il CLI individua le sezioni del proposal testualmente: un Why fenced viene
+    // accettato. Il plugin non deve dire "structure!" su una change che il CLI
+    // accetta (nessun falso giudizio di non conformita').
+    const fenced = "```md\n## Why\n" + "finto. ".repeat(12) + "\n```\n## What Changes\n- x\n";
+    const result = inspectChangeValidity({
+      proposalText: fenced, hasProposal: true, hasSpecs: true,
+      specFiles: [{ path: "spec.md", content: SPEC_VALID }],
+    });
+    assert.equal(result.state, "valid");
+    // La stessa indulgenza NON si applica ai file di spec (test sopra).
+  });
+
+  test("la riga di validita' mostra gli avvisi senza cambiare il verdetto", async () => {
+    const spec = "## ADDED Requirements\n\n### Requirement: Real\nSystem MUST work.\n\n#### Scenario: Works\n- **WHEN** x\n- **THEN** y\n\n## Notes\n### Requirement: Orphan\nSystem MUST also work.\n\n#### Scenario: Demo\nBody.\n";
+    const files = {
+      async listFiles(path) {
+        const p = String(path).replace(/\/$/, "");
+        if (p === "openspec") return { entries: [{ name: "changes", type: "directory" }] };
+        if (p === "openspec/changes") return { entries: [{ name: "demo", type: "directory" }] };
+        if (p === "openspec/changes/demo") return { entries: [{ name: "proposal.md", type: "file" }, { name: "specs", type: "directory" }] };
+        if (p === "openspec/changes/demo/specs") return { entries: [{ name: "cap", type: "directory" }] };
+        if (p === "openspec/changes/demo/specs/cap") return { entries: [{ name: "spec.md", type: "file" }] };
+        throw new Error("nope " + p);
+      },
+      async readFile(p) {
+        if (p.endsWith(".openspec.yaml")) throw new Error("no metadata");
+        if (p.endsWith("proposal.md")) return { content: proposal, binary: false, truncated: false };
+        if (p.endsWith("spec.md")) return { content: spec, binary: false, truncated: false };
+        throw new Error("nope " + p);
+      },
+    };
+    const el = makeElement();
+    el.context = createContext(files, "validity-warning-ui");
+    await settle();
+    el._openChange("demo");
+    await settle(10);
+    const badge = el.shadowRoot.querySelector(".os-validity");
+    assert.ok(badge, "badge di validita' presente");
+    assert.equal(badge.textContent, "structure ok");
+    const details = el.shadowRoot.querySelector(".os-validity-details");
+    assert.ok(details, "gli avvisi devono essere consultabili");
+    assert.match(details.querySelector("summary").textContent, /warning/);
+    assert.match(details.textContent, /outside a delta section/);
+    el.disconnectedCallback();
+  });
+});
+
+describe("review follow-up: markdown", () => {
+  const count = (frag, selector) => frag.querySelectorAll(selector).length;
+
+  test("citazioni annidate molto profonde non esauriscono lo stack", () => {
+    const frag = renderMarkdown(">".repeat(20000) + " x");
+    assert.ok(frag);
+    const nested = count(frag, "blockquote");
+    assert.ok(nested > 0);
+    assert.ok(nested <= 40, `annidamento non limitato: ${nested}`);
+    assert.match(frag.textContent, /x/);
+  });
+
+  test("citazioni di profondita' normale restano annidate", () => {
+    const frag = renderMarkdown("> uno\n> > due\n> > > tre\n");
+    assert.equal(count(frag, "blockquote"), 3);
+    assert.match(frag.textContent, /tre/);
+  });
 });

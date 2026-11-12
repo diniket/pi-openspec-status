@@ -497,6 +497,20 @@ function mdInline(text) {
 
 const MD_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 const MD_TASK = /^\[([ xX])\]\s?([\s\S]*)$/;
+// Livelli massimi di citazioni annidate risolti per ricorsione.
+const MD_MAX_NESTING = 32;
+
+// Fallback non ricorsivo per l'annidamento oltre il tetto: paragrafi di testo.
+function mdPlainBlocks(text) {
+  const frag = document.createDocumentFragment();
+  for (const block of String(text).split(/\n{2,}/)) {
+    if (block.trim() === "") continue;
+    const p = document.createElement("p");
+    p.append(mdInline(block.trim()));
+    frag.append(p);
+  }
+  return frag;
+}
 
 function mdList(items) {
   const root = document.createElement(items[0].ordered ? "ol" : "ul");
@@ -556,7 +570,7 @@ function mdTable(header, rows) {
 
 const mdCells = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
 
-export function renderMarkdown(text) {
+export function renderMarkdown(text, depth = 0) {
   const frag = document.createDocumentFragment();
   const lines = String(text ?? "").replace(/\r\n/g, "\n").split("\n");
   const blank = (l) => /^\s*$/.test(l);
@@ -627,7 +641,12 @@ export function renderMarkdown(text) {
         i++;
       }
       const blockquote = document.createElement("blockquote");
-      blockquote.append(renderMarkdown(quote.join("\n")));
+      // Le citazioni annidate ricorrono una volta per livello: un documento con
+      // migliaia di '>' in testa esaurirebbe lo stack. Oltre il tetto il resto
+      // viene reso come testo, senza ricorsione (l'input resta lineare).
+      blockquote.append(depth >= MD_MAX_NESTING
+        ? mdPlainBlocks(quote.join("\n"))
+        : renderMarkdown(quote.join("\n"), depth + 1));
       frag.append(blockquote);
       continue;
     }
@@ -750,7 +769,12 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
   } else if (typeof proposalText !== "string") {
     return { state: "unverified", reasons: ["proposal.md not readable"], checked: false };
   } else {
-    proposalText = outsideCode(proposalText);
+    // Le sezioni del proposal si cercano sul testo grezzo, come fa il CLI (il
+    // suo parser markdown non esclude i blocchi di codice). Nei file di spec i
+    // fence restano invece esclusi: li' un esempio con "## ADDED Requirements"
+    // o con SHALL farebbe altrimenti risultare conforme una change che il CLI
+    // rifiuta. La severita' nei due versi e' quindi allineata al CLI: nessun
+    // "structure ok" inventato e nessun errore su una change che il CLI accetta.
     const section = (heading) => {
       const found = new RegExp(`^##\\s+${heading}\\s*$`, "im").exec(proposalText);
       if (found === null) return null;
@@ -778,6 +802,9 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
       return { state: "unverified", reasons: [`${file.path} not readable`], checked: false };
     }
     if (/^##\s+(REMOVED|RENAMED)\s+Requirements\s*$/im.test(file.content)) return { state: "unverified", reasons: ["REMOVED/RENAMED deltas require OpenSpec CLI validation"], checked: false };
+    const rawLines = file.content.replace(/\r\n/g, "\n").split("\n");
+    // Confini di sezione (heading reali) letti senza fence: una heading di
+    // esempio non chiude un requisito o uno scenario.
     const lines = outsideCode(file.content).split("\n");
     let deltas = 0;
     let inDelta = false;
@@ -808,10 +835,19 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
       }
       const req = REQUIREMENT_HEADER.exec(line);
       if (req !== null) {
-        if (!inDelta) invalid.push(`${file.path}: requirement outside a delta section`);
-        requirements++;
+        const title = req[1].trim() || "(untitled)";
         closeRequirement();
-        requirement = { title: req[1].trim() || "(untitled)", text: "", scenarios: 0 };
+        if (!inDelta) {
+          // Il CLI ignora i requisiti fuori da una sezione delta e lo segnala
+          // come WARNING, non come errore: qui si fa lo stesso, altrimenti una
+          // change che `openspec validate` accetta risulterebbe "structure!".
+          // Non vengono contati ne' validati (ne' contribuiscono a "no block").
+          requirement = null;
+          warnings.push(`${file.path}: requirement "${title}" is outside a delta section and was ignored`);
+          continue;
+        }
+        requirements++;
+        requirement = { title, text: "", scenarios: 0 };
         continue;
       }
       if (/^#{1,3}\s/.test(line)) {
@@ -822,7 +858,10 @@ export function inspectChangeValidity({ proposalText, hasProposal, specFiles, ha
       if (SCENARIO_HEADER.test(line)) {
         let end = lineIndex + 1;
         while (end < lines.length && !/^#{1,4}\s/.test(lines[end])) end++;
-        if (lines.slice(lineIndex + 1, end).join("\n").trim()) {
+        // Come il CLI conta il contenuto grezzo: un corpo interamente dentro un
+        // blocco di codice e' contenuto (il CLI lo accetta, con un warning sui
+        // passi WHEN/THEN mancanti). I confini restano quelli senza fence.
+        if (rawLines.slice(lineIndex + 1, end).join("\n").trim()) {
           if (requirement !== null) requirement.scenarios++;
           scenarios++;
         }
@@ -1180,12 +1219,37 @@ async function doLoad(context) {
   return state;
 }
 
+// Un nome valido e' un singolo componente di path: i nomi arrivano da
+// readdir, quindi "/", "\\" e NUL indicano una risposta che non si puo'
+// usare per costruire un percorso (il contenimento resta del host, ma un nome
+// del genere verrebbe unito a un path e farebbe fallire l'intera cartella).
+const ENTRY_NAME_UNUSABLE = /[\\/\x00]/;
+
+function usableEntry(entry) {
+  return entry !== null && typeof entry === "object"
+    && typeof entry.name === "string" && entry.name !== ""
+    && !ENTRY_NAME_UNUSABLE.test(entry.name)
+    && entry.name !== "." && entry.name !== ".."
+    && typeof entry.type === "string";
+}
+
+// Un elenco illeggibile e' un errore (il host non ha risposto come da
+// contratto). Una singola entry inutilizzabile viene invece scartata: un file
+// dal nome anomalo non deve rendere invisibili le altre change. L'elenco che ne
+// risulta e' marcato incompleto (`truncated`), cosi' cio' che non si e' potuto
+// elencare resta "sconosciuto" e non diventa mai "assente".
 async function safeList(files, path) {
   try {
     const res = await files.listFiles(path);
     if (!res || !Array.isArray(res.entries)) throw new Error("Malformed directory response");
-    if (res.entries.some(e => !e || typeof e.name !== "string" || !e.name || /[\\/\x00]/.test(e.name) || e.name === "." || e.name === ".." || typeof e.type !== "string")) throw new Error("Invalid directory entry");
-    return res;
+    const entries = [];
+    let skipped = 0;
+    for (const entry of res.entries) {
+      if (usableEntry(entry)) entries.push(entry);
+      else skipped++;
+    }
+    if (skipped === 0) return res;
+    return { ...res, entries, truncated: true, skipped };
   } catch (err) {
     return { error: err };
   }
@@ -1308,7 +1372,8 @@ class OpenspecPanelElement extends HTMLElement {
   #timer = null;          // controllo periodico delle modifiche esterne
   #fingerprint = null;    // impronta degli elenchi all'ultima lettura buona
   #validity = null;       // { state, reasons } della change selezionata
-  #probeFailed = false;
+  #probeFailed = false;   // l'ultimo controllo delle modifiche esterne e' fallito
+  #probeSeq = 0;          // ordine delle sonde: vince sempre la piu' recente
   #probing = false;       // una sonda e' in corso (niente richieste concorrenti)
   #restored = false;      // il ripristino da navigation e' gia' stato tentato
 
@@ -1322,8 +1387,14 @@ class OpenspecPanelElement extends HTMLElement {
     this.#context = value;
     // Un altro workspace (anche con una change omonima) non eredita selezione,
     // dettaglio o documento: si riparte dall'elenco.
-    if (!sameWorkspace) this._resetSelection();
-    else if (prev !== value && this.#pending) {
+    if (!sameWorkspace) {
+      this._resetSelection();
+      // Il pannello resta montato quando l'host cambia workspace: senza questo
+      // azzeramento l'elenco (e il badge) del workspace precedente resterebbero
+      // a schermo finche' la nuova lettura non risponde, cioe' anche per sempre
+      // se quella richiesta non torna.
+      this._clearRenderedState();
+    } else if (prev !== value && this.#pending) {
       // L\x27host puo\x27 sostituire il context anche senza cambiare workspace.
       // Un reload avviato col vecchio oggetto verra\x27 scartato: sblocca la UI.
       this.#reloadSeq++;
@@ -1336,6 +1407,7 @@ class OpenspecPanelElement extends HTMLElement {
   _resetSelection() {
     this.#reloadSeq++;
     this.#validitySeq++;
+    this.#probeSeq++;     // le sonde del workspace precedente non contano piu'
     this.#pending = false;
     if (this.#nodes !== null) this._setBusy(false);
     this.#detailSeq++;   // invalida i load di dettaglio in corso
@@ -1355,6 +1427,12 @@ class OpenspecPanelElement extends HTMLElement {
   // Stato renderizzato (null prima del primo render). Esposto per test/host.
   get state() {
     return this.#state;
+  }
+
+  // Impronta degli elenchi all'ultima lettura buona. Seam di test: serve a
+  // verificare che una sonda superata non sovrascriva quella piu' recente.
+  get fingerprint() {
+    return this.#fingerprint;
   }
 
   _shadow() {
@@ -1411,14 +1489,17 @@ class OpenspecPanelElement extends HTMLElement {
     const ctx = this.#context;
     if (ctx === null || ctx.files === undefined) return;
     this.#probing = true;
+    const seq = ++this.#probeSeq;
     try {
       const fingerprint = await this._probe(ctx);
+      // Una sonda piu' recente (tipicamente partita dopo un refresh) descrive
+      // dati piu' freschi: il suo risultato non va sovrascritto da questa.
+      if (seq !== this.#probeSeq) return;
       if (fingerprint === null) {
-        if (this.isConnected && sameWorkspaceContext(ctx, this.#context)) {
-          this.#probeFailed = true;
-          this.#nodes.stamp.textContent = "Update check failed";
-          this.#nodes.stamp.title = "Displayed data may be stale. Reload to retry.";
-        }
+        // L'avviso riguarda i dati mostrati: se non c'e' ancora nulla a schermo
+        // (primo load o cambio workspace) non c'e' niente da segnalare come
+        // potenzialmente vecchio.
+        if (this.isConnected && this.#state !== null && sameWorkspaceContext(ctx, this.#context)) this._markProbeFailed();
         return;
       }
       if (ctx !== this.#context || !this.isConnected) return;
@@ -1436,50 +1517,103 @@ class OpenspecPanelElement extends HTMLElement {
     }
   }
 
+  // Timestamp dell'ultima lettura buona, oppure avviso di controllo fallito.
+  // L'avviso vive nel flag e non solo nel testo: cosi' sopravvive ai rerender
+  // (un click su una change non fa sparire "dati potenzialmente vecchi" mentre
+  // il polling e' ancora rotto).
+  _renderStamp(state) {
+    if (this.#nodes === null) return;
+    const { stamp } = this.#nodes;
+    if (this.#probeFailed) {
+      stamp.textContent = "Update check failed";
+      stamp.title = "Displayed data may be stale. Reload to retry.";
+      return;
+    }
+    const scannedAt = state === null || state === undefined ? null : state.scannedAt;
+    if (!scannedAt) {
+      stamp.textContent = "";
+      stamp.title = "";
+      return;
+    }
+    let text;
+    try {
+      text = new Date(scannedAt).toLocaleTimeString();
+    } catch {
+      text = String(scannedAt);
+    }
+    if (state.truncated) text = `${text} (list truncated)`;
+    stamp.textContent = text;
+    stamp.title = `Data read at ${new Date(scannedAt).toLocaleString()}`;
+  }
+
+  _markProbeFailed() {
+    this.#probeFailed = true;
+    this._renderStamp(this.#state);
+  }
+
+  // Cambio workspace: niente dato del precedente a schermo mentre si legge il
+  // nuovo (badge, elenco, dettaglio, avvisi).
+  _clearRenderedState() {
+    this.#state = null;
+    if (this.#nodes === null) return;
+    const { body, errorBox, badge } = this.#nodes;
+    badge.textContent = "";
+    badge.title = "";
+    badge.hidden = true;
+    errorBox.textContent = "";
+    errorBox.title = "";
+    errorBox.hidden = true;
+    body.textContent = "";
+    body.append(this._text("p os-muted", "Loading OpenSpec…"));
+    this._renderStamp(null);
+  }
+
+  // Sonda: legge solo elenchi (nome/tipo/dimensione/mtime), mai contenuti.
+  // Solo l'elenco delle change e' indispensabile: se manca non esiste impronta
+  // e il pannello segnala che il controllo non e' riuscito. Le letture
+  // ausiliarie (archivio, specs/, capability) degradano invece a un marcatore
+  // nell'impronta: una cartella illeggibile non spegne l'auto-refresh e resta
+  // distinguibile da "err" (lettura fallita), "trunc" (elenco incompleto) e
+  // assenza di entry.
   async _probe(ctx) {
     try {
-      const list = async path => {
-        const result = await safeList(ctx.files, path);
-        if (result.error) throw result.error;
-        return result;
+      const read = async path => {
+        const res = await safeList(ctx.files, path);
+        if (res.error) return { entries: [], marker: "err" };
+        return { entries: res.entries, marker: res.truncated === true ? "trunc" : "" };
       };
-      const top = await list(CHANGES_DIR);
-      const names = (top.entries || [])
-        .filter(e => (e.type === "directory" || e.type === "symlink") && e.name !== ARCHIVE_DIR)
-        .map(e => e.name)
+      const signature = entries => (entries || [])
+        .map(e => `${e.name}:${e.type}:${e.size ?? ""}:${e.modifiedAt ?? ""}`)
         .sort()
-        .slice(0, INDEX_MAX_CHANGES);
-      const parts = [`top|${top.truncated === true}|${(top.entries || []).filter(e => e.type === "directory" || e.type === "symlink").map(e => e.name).sort().join(",")}`];
-      // Archive-only edits must invalidate the no-active state (and its count).
-      // The archived entries are listed once, rather than reading each change.
-      const archivePresent = (top.entries || []).some(e =>
-        e.name === ARCHIVE_DIR && (e.type === "directory" || e.type === "symlink"));
-      if (archivePresent) {
-        const archived = await list(`${CHANGES_DIR}/${ARCHIVE_DIR}/`);
-        const archiveSig = (archived.entries || [])
-          .filter(e => e.type === "directory" || e.type === "symlink")
-          .map(e => e.name).sort().join(",");
-        parts.push(`archive|${archiveSig}|${archived.truncated === true}`);
+        .join(",");
+      const dirish = list => (list || []).filter(e => e.type === "directory" || e.type === "symlink");
+
+      const top = await safeList(ctx.files, CHANGES_DIR);
+      if (top.error) throw top.error; // senza l'elenco non c'e' impronta
+      const topDirs = dirish(top.entries);
+      const names = topDirs.filter(e => e.name !== ARCHIVE_DIR).map(e => e.name).sort().slice(0, INDEX_MAX_CHANGES);
+      const parts = [`top|${top.truncated === true ? "trunc" : ""}|${topDirs.map(e => e.name).sort().join(",")}`];
+
+      // Il conteggio degli archivi si vede solo nello stato "no-active": altrove
+      // sondare l'archivio e' una richiesta in piu' senza effetto visibile (e una
+      // superficie d'errore in piu'). Le modifiche all'archivio restano coperte
+      // dall'elenco delle change quando ne compaiono o spariscono di attive.
+      if (this.#state !== null && this.#state.kind === "no-active" && topDirs.some(e => e.name === ARCHIVE_DIR)) {
+        const archived = await read(`${CHANGES_DIR}/${ARCHIVE_DIR}/`);
+        parts.push(`archive|${archived.marker}|${dirish(archived.entries).map(e => e.name).sort().join(",")}`);
       }
+
       for (const name of names) {
         const base = `${CHANGES_DIR}/${name}`;
-        const listing = await list(`${base}/`);
-        const sig = (listing.entries || [])
-          .map(e => `${e.name}:${e.type}:${e.size ?? ""}:${e.modifiedAt ?? ""}`)
-          .sort()
-          .join(",");
-        parts.push(`${name}|${sig}|${listing.truncated === true}`);
-        const hasSpecs = (listing.entries || []).some(e => e.name === "specs");
-        if (!hasSpecs) continue;
-        const caps = await list(`${base}/specs/`);
-        parts.push(`caps|${caps.truncated === true}|${caps.entries.length}`);
-        for (const cap of (caps.entries || []).filter(e => e.type === "directory" || e.type === "symlink").slice(0, MAX_SPEC_FILES)) {
-          const inner = await list(`${base}/specs/${cap.name}/`);
-          const specSig = (inner.entries || [])
-            .map(e => `${e.name}:${e.size ?? ""}:${e.modifiedAt ?? ""}`)
-            .sort()
-            .join(",");
-          parts.push(`  ${cap.name}|${specSig}|${inner.truncated === true}`);
+        const listing = await read(`${base}/`);
+        parts.push(`${name}|${listing.marker}|${signature(listing.entries)}`);
+        if (!dirish(listing.entries).some(e => e.name === "specs")) continue;
+        const caps = await read(`${base}/specs/`);
+        const capDirs = dirish(caps.entries);
+        parts.push(`caps|${caps.marker}|${capDirs.length}|${capDirs.slice(0, MAX_SPEC_FILES).map(e => e.name).sort().join(",")}`);
+        for (const cap of capDirs.slice(0, MAX_SPEC_FILES)) {
+          const inner = await read(`${base}/specs/${cap.name}/`);
+          parts.push(`  ${cap.name}|${inner.marker}|${signature(inner.entries)}`);
         }
       }
       return parts.join(";");
@@ -1488,9 +1622,18 @@ class OpenspecPanelElement extends HTMLElement {
     }
   }
 
+  // Dopo una lettura buona si riparte dall'impronta dei dati appena letti, cosi'
+  // il controllo periodico non rilancia un refresh per una modifica gia'
+  // assorbita. L'ordine conta: un'impronta calcolata prima di una sonda piu'
+  // recente viene scartata invece di sovrascriverla.
   _refreshFingerprint(ctx) {
+    const seq = ++this.#probeSeq;
     this._probe(ctx)
-      .then(fp => { if (fp !== null && ctx === this.#context) this.#fingerprint = fp; })
+      .then(fp => {
+        if (fp === null || seq !== this.#probeSeq) return;
+        if (!sameWorkspaceContext(ctx, this.#context)) return;
+        this.#fingerprint = fp;
+      })
       .catch(() => {});
   }
 
@@ -1606,6 +1749,11 @@ class OpenspecPanelElement extends HTMLElement {
       .then(res => {
         if (!this.isConnected || this.#generation !== generation || reloadSeq !== this.#reloadSeq || ctx !== this.#context) return;
         this.#pending = false;
+        // Dati appena riletti: "potrebbe essere vecchio" non e' piu' vero e il
+        // flag non deve forzare un altro reload completo alla prossima sonda
+        // riuscita (refresh manuale riuscito dopo una sonda fallita -> finora
+        // partiva un secondo giro di letture inutile).
+        this.#probeFailed = false;
         this._setBusy(false);
         this._refreshFingerprint(ctx);
         // Le cache del workspace sono state svuotate: il dettaglio aperto va
@@ -1639,7 +1787,7 @@ class OpenspecPanelElement extends HTMLElement {
   _renderState(state) {
     this.#state = state;
     if (this.#nodes === null) this._buildSkeleton();
-    const { body, errorBox, badge, stamp } = this.#nodes;
+    const { body, errorBox, badge } = this.#nodes;
 
     const changes = state.kind === "ready" && Array.isArray(state.changes) ? state.changes : [];
     const n = changes.length;
@@ -1669,17 +1817,7 @@ class OpenspecPanelElement extends HTMLElement {
     errorBox.title = parts.join("\n");
     errorBox.hidden = parts.length === 0;
 
-    let stampText = "";
-    if (state.scannedAt) {
-      try {
-        stampText = new Date(state.scannedAt).toLocaleTimeString();
-      } catch {
-        stampText = state.scannedAt;
-      }
-    }
-    if (state.truncated) stampText = `${stampText} (list truncated)`;
-    stamp.textContent = stampText;
-    stamp.title = state.scannedAt ? `Data read at ${new Date(state.scannedAt).toLocaleString()}` : "";
+    this._renderStamp(state);
 
     // La selezione sopravvive al refresh solo se la change esiste ancora.
     if (this.#selected !== null && !changes.some(ch => ch.name === this.#selected)) {
@@ -1995,24 +2133,34 @@ class OpenspecPanelElement extends HTMLElement {
       wrap.append(err);
     }
 
-    // Validita': riga discreta, con i motivi consultabili a richiesta.
-    if (this.#validity !== null && this.#validity.checked === true && this.#validity.state !== "valid") {
-      const box = this._el("div", "os-validity-box");
-      box.append(this._validityBadge(this.#validity.state));
-      const details = this._el("details", "os-validity-details");
-      const summary = this._el("summary");
-      summary.textContent = `${this.#validity.reasons.length} reason${this.#validity.reasons.length === 1 ? "" : "s"}`;
-      details.append(summary);
-      const ul = this._el("ul");
-      for (const reason of this.#validity.reasons) {
-        const li = this._el("li");
-        li.textContent = reason;
-        ul.append(li);
+    // Validita': riga discreta, con motivi e avvisi consultabili a richiesta.
+    // Gli avvisi non cambiano il verdetto ma non vanno nascosti: sono le
+    // differenze "non bloccanti" del CLI (req. fuori da una sezione delta, testo
+    // molto lungo) e senza questa riga sparirebbero senza traccia.
+    if (this.#validity !== null && this.#validity.checked === true) {
+      const reasons = Array.isArray(this.#validity.reasons) ? this.#validity.reasons : [];
+      const warnings = Array.isArray(this.#validity.warnings) ? this.#validity.warnings : [];
+      const notes = [...reasons, ...warnings.map(w => `warning: ${w}`)];
+      if (notes.length > 0) {
+        const box = this._el("div", "os-validity-box");
+        box.append(this._validityBadge(this.#validity.state));
+        const details = this._el("details", "os-validity-details");
+        const summary = this._el("summary");
+        summary.textContent = reasons.length > 0
+          ? `${reasons.length} reason${reasons.length === 1 ? "" : "s"}${warnings.length > 0 ? `, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}` : ""}`
+          : `${warnings.length} warning${warnings.length === 1 ? "" : "s"}`;
+        details.append(summary);
+        const ul = this._el("ul");
+        for (const note of notes) {
+          const li = this._el("li");
+          li.textContent = note;
+          ul.append(li);
+        }
+        details.append(ul);
+        box.append(details);
+        box.title = `Structural checks: ${notes.join(" · ")}`;
+        wrap.append(box);
       }
-      details.append(ul);
-      box.append(details);
-      box.title = `Structural checks: ${this.#validity.reasons.join(" · ")}`;
-      wrap.append(box);
     }
 
     wrap.append(this._tabsNode(), this._tabPanelNode());
