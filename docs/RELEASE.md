@@ -5,8 +5,10 @@
 - main: `2b08bcefacee0a4ce8cb29bf4ad31d2fb226d3e6`.
 - PR #5: https://github.com/diniket/pi-openspec-status/pull/5
   head `609c6bbe9be7cf586e87e94e6718978ea411e037`, open/draft/unmerged.
-- Feature: `feature/openspec-workspace-experience`, initially published `34cd4fd`;
-  see CONSOLIDATION.md and remote refs for successors. Base is PR #5, not main.
+- Feature draft PR #6: https://github.com/diniket/pi-openspec-status/pull/6,
+  `feature/openspec-workspace-experience`, initial PR head
+  `22156e17bd6b9caba38afc7ae3a04756754e1294`; see remote refs for delivery-doc successors.
+  Base is PR #5 at609c6bb, not main. Both PRs remain draft/open/unmerged and mergeable clean.
 - GitHub API now reports PR #5 mergeable=true, mergeable_state=clean. Local merge-tree
   succeeds and main is an ancestor. Earlier mergeable=false is not a current conflict.
 

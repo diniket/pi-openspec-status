@@ -115,11 +115,28 @@ warning; no plugin error found. Do not summarize this as “zero console message
 merge plan and proposed changelog/release notes; immutable PUCP preparation and baseline rollback
 proof. Package hashes/provenance live in the separate PUCP worktree; no final0.2.0 SHA exists yet.
 
-**BLOCKED:** feature draft PR creation needs authenticated GitHub. Cristina's fresh GitHub window
-explicitly showed **Sign in**, compare base audit/final-hardening -> feature says Able to merge.
-Public API duplicate check found only PR#4/#5. No credentials/cookies were extracted, no token
-requested in chat. SSH push rights do not grant REST/browser login. Draft PR body is ready in
-PR-WORKSPACE-EXPERIENCE.md; actual URL must be recorded after creation.
+**DONE — authentication blocker resolved by the user:** after explicit human login on Cristina,
+created exactly one feature **draft PR#6**, https://github.com/diniket/pi-openspec-status/pull/6,
+base audit/final-hardening-20261112 at609c6bb, initial head
+22156e17bd6b9caba38afc7ae3a04756754e1294. API confirms open/draft/unmerged, mergeable=true,
+mergeable_state=clean,6 feature commits and23 changed files. Body links the full review packet
+at its immutable source SHA. No credentials/cookies extracted or tokens requested in chat.
+Subsequent delivery-only documentation commits update the PR normally without rewriting history.
+PR#5 remains unchanged/open/draft/unmerged; no branch/PR was deleted.
+
+**READY — PUCP preparation:** isolated branch feature/openspec-plugin-release committed locally at
+88fd36f59e0113fe2d9fcb9e04ba9d67960bc323, clean. No PUCP remote is configured, so no remote
+publication is claimed. Final offline proof:2 dedicated tests plus84 existing tests pass,
+log `/tmp/pi-bg/156-bg11.log`. Both tarballs are retained and fully hash/byte-verified; real
+inventory hosts[] gating is tested. Candidate source22156e1 package SHA256
+8543a064a6bbf2aa9abaf86734447fa196ff1139c60bca42c08d6bccb8e816a4;
+rollback609c6bb package SHA256
+a2b05e575fdea7dfe1de163441963e769b6f8952d81335e138a938bb311952b6.
+These are preparation artifacts (version0.1.0), NOT the final0.2.0 package.
+
+**DONE — process cleanup:** isolated web/daemon/tunnel stopped; port18504 no longer listening.
+Production processes remain original PID156/162 and the served original module hash is unchanged.
+Synthetic lab/artifact roots retained for audit; no branches/worktrees/backups/releases deleted.
 
 **PENDING EXPLICIT APPROVAL:** PR#5 merge, feature retarget/review/merge, definitive main/version
 commit, annotatedv0.2.0 tag, npm publication, PUCP host enablement/ownership adoption/deploy.
