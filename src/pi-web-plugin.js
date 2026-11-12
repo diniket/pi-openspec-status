@@ -76,7 +76,7 @@ function runtimeFor(context) {
   if (!r) {
     r = { owners: new Set(), running: 0, queue: [], requests: new Set(), touched: Date.now() };
     runtimes.set(key, r);
-    for (const [k, old] of runtimes) if (!old.owners.size && !old.requests.size && (runtimes.size > 32 || Date.now() - old.touched > CACHE_MAX_AGE_MS)) runtimes.delete(k);
+    for (const [k, old] of runtimes) if (k !== key && !old.owners.size && !old.requests.size && (runtimes.size > 32 || Date.now() - old.touched > CACHE_MAX_AGE_MS)) runtimes.delete(k);
   }
   r.touched = Date.now();
   return r;
@@ -1057,7 +1057,7 @@ async function loadValidation(context, name, detail, { shouldContinue = () => tr
     let skipSpecs = false;
     try {
       const meta = detail.metadataPresent ? await workspaceFiles(context).readFile(`${CHANGES_DIR}/${name}/.openspec.yaml`) : { content: "" };
-      skipSpecs = /^\s*skip_specs\s*:/im.test(meta.content) && !/^skip_specs\s*:\s*false\s*$/im.test(meta.content);
+      skipSpecs = /^\s*skip_specs\s*:/im.test(meta.content) && !/^\s*skip_specs\s*:\s*false\s*$/im.test(meta.content);
       const schema = /^schema\s*:\s*(.+)\s*$/im.exec(meta.content);
       if (schema && schema[1].trim() !== "spec-driven") return { state: "unverified", reasons: ["custom or unsupported schema metadata requires OpenSpec CLI validation"], checked: false };
       if (meta.truncated || meta.binary || typeof meta.content !== "string") return { state: "unverified", reasons: ["metadata incomplete or unreadable"], checked: false };
@@ -2215,8 +2215,8 @@ class OpenspecPanelElement extends HTMLElement {
 
   _drawState(state) {
     this.#state = state;
-    this._renderControls();
     if (this.#nodes === null) this._buildSkeleton();
+    this._renderControls();
     const { body, errorBox, badge } = this.#nodes;
 
     const changes = state.kind === "ready" && Array.isArray(state.changes) ? state.changes : [];
@@ -2274,7 +2274,7 @@ class OpenspecPanelElement extends HTMLElement {
       return;
     }
     if (changes.length === 0) {
-      body.append(this._text("p empty", "No active changes."));
+      body.append(this._text("p empty", this.#mode === "archive" ? "No archived changes." : "No active changes."));
       return;
     }
 

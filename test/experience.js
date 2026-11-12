@@ -42,6 +42,18 @@ const changes = [task('Zulu', 2, 2), task('alpha', 0, 2), task('beta', 1, 2), ta
 const names = list => list.map(ch => ch.name);
 function nav(initial = {}) { return { query: { ...initial }, set(k, v) { assert.match(k, /^[a-z][a-z0-9.-]*$/); if (v == null) delete this.query[k]; else this.query[k] = String(v); } }; }
 
+test('runtime pruning retains the newly mounted workspace above 32 owners', async () => {
+  for (let i = 0; i < 32; i++) await mount(fixture({ count: 0 }));
+  const { el, ctx, files } = await mount(fixture({ count: 0 }));
+  let signal;
+  files.readFile = (_path, options) => { signal = options.signal; return new Promise(() => {}); };
+  const pending = loadDoc(ctx, 'openspec/changes/pending.md');
+  await settle();
+  el.isConnected = false; el.disconnectedCallback();
+  assert.equal(signal?.aborted, true);
+  await pending;
+});
+
 test('search is case insensitive, applies to loaded names only', () => {
   assert.deepEqual(names(selectChanges(changes, { search: 'ALP' })), ['alpha']);
   assert.deepEqual(selectChanges(changes, { search: 'absent' }), []);
@@ -261,6 +273,14 @@ test('custom schema and skip_specs cannot produce structural pass', async () => 
     fs.readFile = (path, options) => path.endsWith('.openspec.yaml') ? Promise.resolve({ content: metadata }) : read(path, options);
     const { el, root } = await mount(fs); await el._startBatch(); assert.match(root.querySelector('.os-diagnostics').textContent, /1 unverified/);
   }
+});
+
+test('indented false skip_specs metadata does not defer a supported check', async () => {
+  const fs = fixture({ count: 1 }), list = fs.listFiles.bind(fs), read = fs.readFile.bind(fs);
+  fs.listFiles = async (path, options) => { const res = await list(path, options); if (path === 'openspec/changes/change-00/') res.entries.push({ name: '.openspec.yaml', type: 'file' }); return res; };
+  fs.readFile = (path, options) => path.endsWith('.openspec.yaml') ? Promise.resolve({ content: 'schema: spec-driven\n  skip_specs: false  \n' }) : read(path, options);
+  const { el, root } = await mount(fs); await el._startBatch();
+  assert.match(root.querySelector('.os-diagnostics').textContent, /1 pass · 0 incomplete · 0 unverified/);
 });
 
 test('directory traversal does not begin after an operation deadline', async () => {
