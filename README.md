@@ -4,9 +4,6 @@ A small, read-only **OpenSpec panel for PI WEB**. It adds an **OpenSpec** tab to
 
 ## Screenshots
 
-All images come from the bundled synthetic fixtures, rendered by the real plugin inside a
-Chromium page with PI WEB's own theme: no real project, path, session or host appears in them.
-
 ![Active changes with the search, filter and sort controls, the operational summary and a
 progress bar per change](docs/images/panel-overview.png)
 
