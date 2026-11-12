@@ -221,3 +221,52 @@ the user clicked again.
 PI WEB itself may not restore a deep link with `tool=openspec-status:openspec-status` during
 initial plugin activation. This issue is in the host route restore logic; open the project
 and select the OpenSpec tab as a workaround. No host patch is part of this plugin.
+
+## Final hardening (2026-11-12)
+
+See [audit and validation evidence](AUDIT-2026-11-12.md). The task summary parser now
+projects `parseTaskItems()` instead of maintaining a second scanner. Task content is shared
+between the index and document viewer; index reads retain their shorter 30-second freshness
+window. Forced UI refresh removes the index entry as well as child caches, so in-flight
+responses cannot become the refreshed cache generation. Obsolete validation results are
+not written back after their detail cache generation is removed.
+
+Document/detail/validation caches now prune completed entries after ten minutes or when
+over 256 entries (in-flight entries are preserved). The index remains capped at 16 completed
+workspace entries. Spec traversal is capped at 12 capability folders as well as 12 documents;
+incomplete listings must not be presented as proof of absence or structural validity.
+
+Directory entry names must be single path components. The host still owns workspace and
+symlink containment; this plugin has no direct filesystem access. It does not resolve
+worktrees separately: the host-selected workspace supplies the root, and cache keys include
+both machine and workspace identity.
+
+## Review follow-up (2026-11-12, second pass)
+
+See [review follow-up](REVIEW-FOLLOWUP-2026-11-12.md) for the evidence behind each item.
+
+- **Polling survives auxiliary read failures.** The fingerprint marks each auxiliary
+  listing as readable (`names`), truncated (`trunc`) or unreadable (`err`). Only an
+  unreadable `openspec/changes` listing returns `null` (a failed check); an unreadable
+  `archive`, `specs/` or capability folder keeps the check alive and stays distinguishable
+  from absent and from incomplete.
+- **Probe generations.** Every probe takes a sequence number and only the most recent one
+  writes `#fingerprint` or decides a reload, so a slow probe cannot overwrite a newer
+  fingerprint (a stale write used to cost one extra full reload).
+- **The stale warning is state, not text.** `#probeFailed` is rendered by `_renderStamp()`
+  on every render and cleared only when data has actually been re-read, so it no longer
+  disappears on a click and no longer forces a redundant reload after a manual refresh.
+- **Anomalous entries are skipped.** `safeList()` drops entries whose name is not a single
+  path component (or whose type is missing), marks the listing `truncated` and continues;
+  a broken response shape (`entries` not an array) stays an error.
+- **Workspace switches clear the panel.** `_clearRenderedState()` empties body, badge and
+  error box and shows a loading placeholder, so a slow (or never answering) workspace
+  cannot leave the previous workspace's changes on screen.
+- **Markdown nesting is bounded.** `renderMarkdown()` recurses on blockquotes; beyond
+  `MD_MAX_NESTING` (32) the remaining quote is rendered as plain paragraphs. A 20 000-level
+  quote used to throw `RangeError` and now renders.
+- **Polling cost.** The archive listing is probed only in the `no-active` state, where the
+  count is displayed. Measured `listFiles` per probe: 6 (1 change / 3 capabilities), 172
+  (`pi-agent-dashboard`: 40 displayed changes, real tree), 561 (synthetic worst case:
+  40 changes × 12 capabilities). No further bound was added: capping the per-capability
+  walk would make spec edits silently undetected, and the cost is dominated by that walk.
