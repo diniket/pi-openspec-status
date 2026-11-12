@@ -67,12 +67,30 @@ Per installazione e comandi usa le istruzioni sopra: pacchetto npm `pi-openspec-
 
 Directory/file responses that cannot be verified are reported as unknown or read errors.
 Truncated task documents explicitly label their partial totals. A failed background check
-marks the displayed data as potentially stale and retries on the next polling interval.
+marks the displayed data as potentially stale, keeps that warning visible across re-renders,
+and retries on the next polling interval. An auxiliary directory that cannot be listed
+(`archive`, `specs/`, a capability folder) marks that part of the change fingerprint as
+unreadable instead of disabling the check; only an unreadable `openspec/changes` listing
+counts as a failed check. Workspace switches clear the rendered panel immediately, so data
+from the previous workspace is never displayed while the new listing loads.
+
+Anomalous directory entries (names that are not a single path component, missing type) are
+skipped instead of hiding the whole folder, and the listing is then reported as incomplete:
+what could not be listed stays **unknown** and never becomes **absent**.
 
 The local structure check handles proposal sections and ADDED/MODIFIED requirement
 blocks outside fenced examples. REMOVED/RENAMED deltas and `skip_specs` metadata are
 reported as **unverified**: use the OpenSpec CLI for their full semantics. It does not
 check existing main specs, schema-specific artifacts, or cross-file conflicts.
+
+Alignment with the OpenSpec CLI (verified against `openspec validate` 1.17.0 on 99 real
+changes in eight repositories, all agreeing): a scenario whose body is a fenced code block
+is content, requirements outside a delta section are **warnings** (the CLI ignores them),
+and proposal sections are located textually as the CLI does. The check remains stricter
+than default `openspec validate` where the CLI only warns: a missing SHALL/MUST is an
+error (like `openspec validate --strict`), and a `Why` section shorter than 50 characters
+or a missing `proposal.md` are reported as well. Those are the only known divergences and
+they never make an invalid change look valid.
 
 An optional real-browser smoke check is available as `python scripts/browser-smoke.py`
 with Python Playwright and `/usr/bin/chromium` installed. It serves the checkout locally,
