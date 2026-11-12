@@ -2,6 +2,33 @@
 
 A small, read-only **OpenSpec panel for PI WEB**. It adds an **OpenSpec** tab to the workspace view, so you can check what is in progress without opening every Markdown file.
 
+## Screenshots
+
+All images come from the bundled synthetic fixtures, rendered by the real plugin inside a
+Chromium page with PI WEB's own theme: no real project, path, session or host appears in them.
+
+![Active changes with the search, filter and sort controls, the operational summary and a
+progress bar per change](docs/images/panel-overview.png)
+
+*Active changes: search, task-state/artifact filters, deterministic sorting, an operational
+summary and per-change progress. Artifact chips show presence, not validity.*
+
+![Change detail: Markdown documents, task filters and collapsible task
+sections](docs/images/panel-tasks.png)
+
+*Change detail: Proposal/Design/Specs/Tasks tabs, task filters (all / to complete / completed)
+and collapsible task sections. Task completion is not structural conformity.*
+
+![Archive mode listing archived changes](docs/images/panel-archive.png)
+
+*Archive mode loads `openspec/changes/archive/` only when you ask for it; the ordinary poll
+never walks archive contents.*
+
+![Batch structural check results per loaded change](docs/images/panel-check-all.png)
+
+***Check all loaded changes*** reports one verdict per change (structure ok / incomplete /
+unverified / structural error) and states plainly that this is not full CLI validation.
+
 ## What you get
 
 - **Loaded changes:** instant name search, task-state/artifact filters and deterministic sorting (name, progress or open tasks). Unknown counts always sort last. No file requests while typing.
@@ -10,7 +37,7 @@ A small, read-only **OpenSpec panel for PI WEB**. It adds an **OpenSpec** tab to
 - **On-demand archive:** browse archived changes and documents separately; arbitrary directory names are supported. The ordinary poll never walks archive contents.
 - **Updates:** refresh manually, react to file changes reported by PI WEB, or check for edits made in an external editor or terminal every 60 seconds while the panel is active.
 - **Navigation:** open a document in PI WEB's Files tab and return to the same change and document.
-- **Local structural diagnostics:** check the selected change or explicitly **Check all loaded changes**, see progress/results, stop scheduling further checks and jump to a result. This is **not** `openspec validate`; incomplete, unreadable or unsupported inputs remain unverified.
+- **Local structural diagnostics:** each loaded change carries a badge (structure ok / incomplete / unverified / structural error); select one to read its reasons and warnings, or explicitly **Check all loaded changes** for a batch run with progress/results, the ability to stop scheduling further checks and to jump to a result. This is **not** `openspec validate`; incomplete, unreadable or unsupported inputs remain unverified.
 
 The plugin only reads workspace files through PI WEB's file API. It does not modify projects, run the OpenSpec CLI or require a model or runtime dependencies.
 
@@ -73,6 +100,8 @@ MIT licensed. See [LICENSE](LICENSE).
 ### Italiano
 
 Plugin di sola lettura per visualizzare le change OpenSpec direttamente in PI WEB: stato degli artefatti, avanzamento dei task, documenti Markdown e controllo strutturale di base. Rileva anche le modifiche fatte da terminale o editor esterni, senza modificare i file del progetto. Include ricerca e filtri sulle sole change caricate (massimo 40 per elenco), riepilogo operativo, task filtrabili con sezioni comprimibili, archivio su richiesta e diagnostica strutturale batch interrompibile. I conteggi sconosciuti non sono zeri; task completati non significa conformità strutturale.
+
+Gli screenshot qui sopra sono generati dai fixture sintetici del repository con il tema reale di PI WEB: nessun progetto, percorso, sessione o host reale vi compare.
 
 Per installazione e comandi usa le istruzioni sopra: pacchetto npm `pi-openspec-status-web` da
 **Impostazioni → Pi packages**, oppure il symlink da un checkout GitHub. Il controllo strutturale **non sostituisce** `openspec validate`.
