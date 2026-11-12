@@ -77,25 +77,33 @@ tag exists; remote tag is absent at last ls-remote check. A human must handle th
 push manually; do not represent the main push as tag publication or create a GitHub release that
 implicitly bypasses this block by creating the tag.
 
-## DONE — npm authentication and publication (2026-11-12)
+## BLOCKED — npm publication needs a second-factor confirmation
 
-The legacy token in `~/.npmrc` was stale: `npm whoami` returned401, and the first publish attempt
-(after the expired web-login attempt) was rejected with HTTP404 without publishing anything;
-registry still advertised latest0.1.0 and no0.2.0 version existed.
+The legacy token in `~/.npmrc` was stale: `npm whoami` returned401, and an early publish attempt
+was rejected with HTTP404 without publishing anything.
 
-The user then completed `npm login --auth-type=web` in a browser on Cristina. `npm whoami` now
-returns `diniket`, and the verified tarball was published:
+The user then completed `npm login --auth-type=web` on Cristina; `npm whoami` now returns `diniket`.
+Two publish invocations of the verified tarball followed:
 
-```
-npm publish ./pi-openspec-status-web-0.2.0.tgz --access public
-+ pi-openspec-status-web@0.2.0
-```
+1. The first printed `+ pi-openspec-status-web@0.2.0` and a notice that the package was being
+   processed. **This was misleading**: `https://registry.npmjs.org/pi-openspec-status-web`
+   still lists only0.0.0-stage and0.1.0 (latest0.1.0), the version metadata and tarball URL return
+   404, and no CDN propagation was observed after several minutes. Do not treat that line as proof.
+2. A repeat publish of the identical tarball returned `EOTP - This operation requires a one-time
+   password`, offering a browser approval URL. So npm still requires an interactive second factor
+   for this write; the earlier apparent success did not create the version.
 
-npm CLI reported success (`Your package is being processed and may take a few minutes`).
-Registry visibility/integrity propagation is an asynchronous CDN step and is verified separately
-below; do not claim registry availability before reading it back.
+Conclusion (measured): **0.2.0 is NOT published.** Registry, version metadata, tarball URL and
+dist-tags were all read back and disagree with the success line. Publication requires the user to
+supply the current TOTP code (Bitwarden item `npm`) or approve the npm browser prompt while the
+publish is running; Pi must not receive the code in chat and does not read tokens.
 
-## HISTORICAL — npm authentication blocker (resolved above)
+The verified artifact is unchanged and safe to publish when confirmation succeeds:
+tarball SHA-256 `f68f1a9f…ed0b79`, integrity `sha512-PcWZWV85…T6SgA==`, module `6857432a…e226`.
+After a successful publish, re-read `npm view pi-openspec-status-web@0.2.0 dist.integrity
+dist.shasum`, the tarball URL and `dist-tags`, and compare against these values before reporting.
+
+## HISTORICAL — npm authentication blocker (superseded by the section above)
 
 Registry package maintainer isdiniket; initial npm whoami on bothpi-hub andCristina returned401.
 A normal `npm login --auth-type=web` was started and its one-time CLI URL was opened on Cristina
