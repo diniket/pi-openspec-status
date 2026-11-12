@@ -38,7 +38,8 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test test/run.js"
+    "test": "node --test test/run.js test/experience.js",
+    "benchmark": "node scripts/benchmark.mjs"
   },
   "files": [
     "dist",
