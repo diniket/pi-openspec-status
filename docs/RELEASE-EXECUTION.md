@@ -86,7 +86,14 @@ another machine. The user did not complete the browser login within the validity
 page returned `Invalid or Expired Token`, and the CLI process exited1 at the `Username:` prompt
 after about5 minutes. This is an expired authentication attempt, **not** a rejected package or
 permission decision. Publication is NOT claimed and registry still has latest0.1.0.
-A fresh login session and immediate human completion are required. Afterwards measure
+A second attempt used a **freshly generated** one-time URL, opened within about40 seconds in the
+same Cristina window; npmjs.com again answered404 `Invalid or Expired Token`. Server date matched
+local UTC clock, so clock skew is not the explanation. npmjs.com displayed an authenticated-looking
+header in that browser, but this legacy `login/cli/<uuid>` flow did not grant the CLI a session.
+No password/OTP was entered by Pi, no token was displayed, read or stored, and the login process
+was stopped. Do not keep generating login links in a loop. The npm web flow is therefore
+**not demonstrated working in this environment**; publication requires a human-run login with a
+flow that actually succeeds (or an explicitly authorized client/credential path). Afterwards measure
 npm whoami and owner rights, publish ONLY the verified tarball, then compare registry dist
 integrity. Do not overwrite an existing0.2.0 version. GitHub release publication follows the
 real remote tag, which remains blocked as described above.
