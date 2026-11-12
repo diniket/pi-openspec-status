@@ -43,7 +43,7 @@ The plugin only reads workspace files through PI WEB's file API. It does not mod
 
 ## Install
 
-Verified with **PI WEB 1.202611.1** (plugin API v5): isolated real-shell GUI tests on Cristina use actual host discovery/file/navigation APIs and synthetic projects. Separate Chromium harness tests still use simulated host APIs. See [consolidation evidence](docs/CONSOLIDATION.md) for coverage and remaining limits. The workspace needs an `openspec/changes/` directory.
+Verified with **PI WEB 1.202611.1** (plugin API v5): isolated real-shell GUI tests use actual host discovery/file/navigation APIs and synthetic projects. Separate Chromium harness tests still use simulated host APIs. See [consolidation evidence](docs/CONSOLIDATION.md) for coverage and remaining limits. The workspace needs an `openspec/changes/` directory.
 
 **From npm** (recommended). In PI WEB open **Settings → Pi packages**, enter
 `npm:pi-openspec-status-web` and choose **Install**. Then open **Settings → PI WEB plugins**,
