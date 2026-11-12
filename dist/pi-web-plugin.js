@@ -1814,7 +1814,7 @@ class OpenspecPanelElement extends HTMLElement {
       // sondare l'archivio e' una richiesta in piu' senza effetto visibile (e una
       // superficie d'errore in piu'). Le modifiche all'archivio restano coperte
       // dall'elenco delle change quando ne compaiono o spariscono di attive.
-      if (this.#state !== null && this.#state.kind === "no-active" && topDirs.some(e => e.name === ARCHIVE_DIR)) {
+      if (names.length === 0 && topDirs.some(e => e.name === ARCHIVE_DIR)) {
         const archived = await read(`${CHANGES_DIR}/${ARCHIVE_DIR}/`);
         parts.push(`archive|${archived.marker}|${dirish(archived.entries).map(e => e.name).sort().join(",")}`);
       }

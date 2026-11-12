@@ -54,6 +54,20 @@ test('runtime pruning retains the newly mounted workspace above 32 owners', asyn
   await pending;
 });
 
+test('shared no-active probe includes archive without instance render state', async () => {
+  const fs = fixture({ count: 0, archive: 1 });
+  const ctx = createContext(fs, `experience-${++seq}`);
+  const el = new Panel();
+  assert.match(await el._probe(ctx), /archive\|.*any-name-0/);
+});
+
+test('partial parent cannot prove that an unreadable archive is absent', async () => {
+  const ctx = createContext(fixture({ count: 0, truncatedPaths: ['openspec/changes'] }), `experience-${++seq}`);
+  const result = await loadOpenSpecState(ctx, { archive: true });
+  assert.equal(result.state.kind, 'error');
+  assert.equal(result.state.truncated, true);
+});
+
 test('search is case insensitive, applies to loaded names only', () => {
   assert.deepEqual(names(selectChanges(changes, { search: 'ALP' })), ['alpha']);
   assert.deepEqual(selectChanges(changes, { search: 'absent' }), []);
