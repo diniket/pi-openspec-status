@@ -68,16 +68,43 @@ Verified rollback command:
 ```
 Reload browser; no daemon restart. Source remainsv0.2.0 so rollback drift is expected until reapply.
 
-## BLOCKED — remote tag publication
+## DONE — npm publication verified after user 2FA
+
+Final measured state of `https://registry.npmjs.org/pi-openspec-status-web`:
+
+- versions `0.0.0-stage`, `0.1.0`, **`0.2.0`**; `dist-tags.latest` = **0.2.0**
+- `dist.integrity` = `sha512-PcWZWV85MGqPbJHc0qsdluVwMFEhLVyIyVYUvfs2yRwUHBs0Y5GTsNikI1ID6z2lcd2kNQOy4G5EAmFnjT6SgA==`
+  (identical to the approved tarball), `dist.shasum` = `6832a304b63705a1f5c9d9c11b17a3bb0eac6066`
+- maintainer `diniket`
+- last CDN propagation of the package tarball was slow but completed: downloading
+  `.../pi-openspec-status-web-0.2.0.tgz` now returns HTTP200 and its **SHA-256 is
+  `f68f1a9f5796b4d3172654ee66fc4c370928178b574c769668c3a592b9ed0b79`**, byte-identical to the
+  artifact built from release source `b7d92d7` and verified before upload.
+
+Publication used the user's interactive 2FA on the normal npm web flow; Pi never received or
+stored an OTP or token. The earlier misleading `+ pi-openspec-status-web@0.2.0` line is explained
+by that delayed confirmation/propagation, not by a duplicate publication.
+
+## DONE — annotated tag and GitHub release
+
+The user ran the plain `git push origin v0.2.0` that Guardian refuses from Pi. Remote state:
+annotated tag object `0aa30db0bea6817f40140675ddee92228655e41b` dereferences to commit
+**`b7d92d7b0fcdf281a7398f97ac93f83eaf43419a`**, i.e. the exact release source.
+
+GitHub release created through the authenticated browser on Cristina:
+https://github.com/diniket/pi-openspec-status/releases/tag/v0.2.0 — name
+"OpenSpec Status Web v0.2.0", not draft, not pre-release, marked Latest, notes generated from the
+same evidence package (read-only scope, limits, npm name and checksums).
+
+## HISTORICAL — earlier npm/tag blockers (all resolved)
 
 Plain guarded `git push origin v0.2.0` was rejected before transport:
 `push di ref non-branch non supportato da Guardian ... push di tag non supportato ... gestisci manualmente`.
-No alternate executor, GitHub ref-creation API, guard change or force was attempted. Local annotated
-tag exists; remote tag is absent at last ls-remote check. A human must handle the unsupported tag
-push manually; do not represent the main push as tag publication or create a GitHub release that
-implicitly bypasses this block by creating the tag.
+No alternate executor, GitHub ref-creation API, guard change or force was attempted. At that check
+the local annotated tag existed and the remote one did not; the user has since published it normally
+(see the DONE section above). Never represent a main push as tag publication.
 
-## BLOCKED — npm publication needs a second-factor confirmation
+## HISTORICAL — npm publication blocker (resolved by the section above)
 
 The legacy token in `~/.npmrc` was stale: `npm whoami` returned401, and an early publish attempt
 was rejected with HTTP404 without publishing anything.
